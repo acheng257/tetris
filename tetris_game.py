@@ -2,6 +2,8 @@ import curses
 import time
 import random
 import copy
+import locale
+locale.setlocale(locale.LC_ALL, '')
 
 # Constants
 BOARD_WIDTH = 10
@@ -154,7 +156,7 @@ def draw_board(stdscr, board, score, level):
         stdscr.addstr(controls_y + 1, start_x + board_width + 2, "← → : Move")
         stdscr.addstr(controls_y + 2, start_x + board_width + 2, "↑ : Rotate")
         stdscr.addstr(controls_y + 3, start_x + board_width + 2, "↓ : Soft drop")
-        stdscr.addstr(controls_y + 4, start_x + board_width + 2, "Space : Hard drop")
+        stdscr.addstr(controls_y + 4, start_x + board_width + 2, "Space: Hard drop")
         stdscr.addstr(controls_y + 5, start_x + board_width + 2, "c : Hold piece")
         stdscr.addstr(controls_y + 6, start_x + board_width + 2, "q : Quit")
 
@@ -286,7 +288,6 @@ def draw_piece(stdscr, piece, board, ghost=False):
                         except curses.error:
                             pass
 
-
 def draw_next_and_held(stdscr, next_piece, held_piece, board):
     """Draw the next piece and held piece previews."""
     h, w = stdscr.getmaxyx()
@@ -297,8 +298,7 @@ def draw_next_and_held(stdscr, next_piece, held_piece, board):
     start_y = max(0, (h - board_height) // 2)
     start_x = max(0, (w - board_width) // 2)
 
-    # Area for next piece preview
-    preview_y = start_y + 10
+    preview_y = start_y + 15
     preview_x = start_x + board_width + 2
 
     try:
@@ -314,7 +314,10 @@ def draw_next_and_held(stdscr, next_piece, held_piece, board):
                 if cell:
                     color_pair = curses.color_pair(next_piece.color + 1)
                     stdscr.addstr(
-                        next_preview_y + y, next_preview_x + x * 2, "[]", color_pair
+                        next_preview_y + y,
+                        next_preview_x + x * 2,
+                        "[]",
+                        color_pair
                     )
 
         # Hold piece preview
@@ -330,7 +333,10 @@ def draw_next_and_held(stdscr, next_piece, held_piece, board):
                     if cell:
                         color_pair = curses.color_pair(held_piece.color + 1)
                         stdscr.addstr(
-                            held_preview_y + y, held_preview_x + x * 2, "[]", color_pair
+                            held_preview_y + y,
+                            held_preview_x + x * 2,
+                            "[]",
+                            color_pair
                         )
     except curses.error:
         pass  # Ignore errors for drawing off-screen
