@@ -370,7 +370,7 @@ def main(stdscr):
     key_down_pressed = False
     last_key_time = time.time()  # Track time of last key input
     last_move_time = time.time()  # Track last movement time
-    move_delay = 0.15  # Delay between movements (for key repeat)
+    move_delay = 0.08  # Delay between movements (for key repeat)
 
     # Key press flags - to detect the first press of a key
     key_left_first_press = False
@@ -439,31 +439,45 @@ def main(stdscr):
 
         # Handle rotation (immediately, before movement)
         if key_up_first_press:
+            # Record original right edge (in board coordinates)
+            old_right = current_piece.x + len(current_piece.shape[0]) - 1
             rotated = current_piece.rotate()
             rotation_successful = False
 
-            if not check_collision(board, current_piece, 0, 0, rotated):
-                current_piece.shape = rotated
-                rotation_successful = True
-            else:
-                # Try wall kicks (move piece when rotation causes collision)
-                for kick in [LEFT, RIGHT]:
-                    if not check_collision(
-                        board, current_piece, kick["x"], kick["y"], rotated
-                    ):
-                        current_piece.x += kick["x"]
-                        current_piece.shape = rotated
-                        rotation_successful = True
-                        break
+            # If the piece is flush with the right wall, try to keep the right edge fixed:
+            if old_right == BOARD_WIDTH - 1:
+                new_width = len(rotated[0])
+                # Compute a new x so that the right edge stays fixed
+                adjusted_x = BOARD_WIDTH - new_width
+                old_x = current_piece.x  # backup current x
+                current_piece.x = adjusted_x
+                if not check_collision(board, current_piece, 0, 0, rotated):
+                    current_piece.shape = rotated
+                    rotation_successful = True
+                else:
+                    current_piece.x = old_x  # restore original x if collision occurs
 
-            # Reset lock timer if rotated while landing
+            # Fallback if not flush against right wall or previous adjustment failed
+            if not rotation_successful:
+                if not check_collision(board, current_piece, 0, 0, rotated):
+                    current_piece.shape = rotated
+                    rotation_successful = True
+                else:
+                    # Try wall kicks: attempt to shift left or right to see if rotation then works
+                    for kick in [LEFT, RIGHT]:
+                        if not check_collision(board, current_piece, kick["x"], kick["y"], rotated):
+                            current_piece.x += kick["x"]
+                            current_piece.shape = rotated
+                            rotation_successful = True
+                            break
+
+            # Reset lock timer if rotated while touching ground
             if rotation_successful and touching_ground:
                 lock_timer = current_time
-                landing_y = (
-                    current_piece.y
-                )  # Update landing y to prevent immediate lock
+                landing_y = current_piece.y
 
             key_up_first_press = False
+
 
         # Handle initial key press - move only once on initial press
         if key_left_first_press:
