@@ -172,6 +172,12 @@ def draw_board(stdscr, board, score, level):
             pass  # Give up if even this fails
         return False
 
+def is_game_over(board):
+    # Check the top two rows of the board for any filled cells.
+    for row in board[:2]:
+        if any(cell != EMPTY_CELL for cell in row):
+            return True
+    return False
 
 def check_collision(board, piece, dx=0, dy=0, rotated_shape=None):
     """Check if piece would collide with board boundaries or other pieces."""
@@ -561,7 +567,7 @@ def main(stdscr):
                 key_down_pressed = False
 
                 # Check if game over (new piece collides immediately)
-                if check_collision(board, current_piece):
+                if is_game_over(board):
                     game_over = True
 
                 # Reset fall timer
