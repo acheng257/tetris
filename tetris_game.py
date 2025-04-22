@@ -23,12 +23,12 @@ TETROMINOES = {
 
 COLORS = {
     0: curses.COLOR_BLACK,  # Background
-    1: curses.COLOR_CYAN,  # I
-    2: curses.COLOR_YELLOW,  # O
-    3: curses.COLOR_MAGENTA,  # T
+    1: curses.COLOR_CYAN,   # I
+    2: curses.COLOR_YELLOW, # O
+    3: curses.COLOR_MAGENTA,# T
     4: curses.COLOR_GREEN,  # S
-    5: curses.COLOR_RED,  # Z
-    6: curses.COLOR_BLUE,  # J
+    5: curses.COLOR_RED,    # Z
+    6: curses.COLOR_BLUE,   # J
     7: curses.COLOR_WHITE,  # L (using white instead of orange for better visibility)
     8: curses.COLOR_WHITE,  # Border
 }
@@ -43,7 +43,6 @@ class Piece:
     def __init__(self, tetromino_type=None):
         if tetromino_type is None:
             tetromino_type = random.choice(list(TETROMINOES.keys()))
-
         self.type = tetromino_type
         self.shape = copy.deepcopy(TETROMINOES[tetromino_type]["shape"])
         self.color = TETROMINOES[tetromino_type]["color"]
@@ -58,14 +57,11 @@ class Piece:
 
     def rotate(self):
         """Rotate the piece 90 degrees clockwise."""
-        # Create a new rotated shape
         rows, cols = len(self.shape), len(self.shape[0])
         rotated = [[0 for _ in range(rows)] for _ in range(cols)]
-
         for r in range(rows):
             for c in range(cols):
                 rotated[c][rows - 1 - r] = self.shape[r][c]
-
         return rotated
 
     def get_positions(self):
@@ -81,76 +77,54 @@ class Piece:
 def init_colors():
     curses.start_color()
     for i, color in COLORS.items():
-        # Use color pair i+1 (0 is reserved for default background)
         curses.init_pair(i + 1, color, curses.COLOR_BLACK)
 
 
 def create_board():
-    # Create an empty board (list of lists)
     return [[EMPTY_CELL for _ in range(BOARD_WIDTH)] for _ in range(BOARD_HEIGHT)]
 
 
-def draw_board(stdscr, board, score, level):
+def draw_board(stdscr, board, score, level, combo_display):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
 
-    # Calculate dimensions needed
-    board_height = BOARD_HEIGHT + 2  # Board + borders
-    board_width = BOARD_WIDTH * 2 + 2  # Each cell is 2 chars wide + borders
+    board_height = BOARD_HEIGHT + 2  # including borders
+    board_width = BOARD_WIDTH * 2 + 2  # each cell 2 chars wide + borders
 
-    # Check if terminal is big enough
-    if h < board_height or w < board_width + 15:  # +15 for score and other text
+    if h < board_height or w < board_width + 15:  # +15 for text
         stdscr.clear()
         error_msg = "Terminal too small! Resize and restart."
         try:
             stdscr.addstr(h // 2, max(0, (w - len(error_msg)) // 2), error_msg)
             stdscr.refresh()
-            stdscr.getch()  # Wait for key press
+            stdscr.getch()
         except curses.error:
-            pass  # Even this message might not fit
+            pass
         return False
 
-    # Calculate start position for the board (centered)
     start_y = max(0, (h - board_height) // 2)
     start_x = max(0, (w - board_width) // 2)
 
-    # Draw border
-    border_color = curses.color_pair(8 + 1)  # White border
-    # Top border
+    border_color = curses.color_pair(8 + 1)
     try:
         stdscr.addstr(start_y, start_x, "+" + "--" * BOARD_WIDTH + "+", border_color)
-        # Side borders
         for y in range(BOARD_HEIGHT):
             stdscr.addstr(start_y + 1 + y, start_x, "|", border_color)
-            stdscr.addstr(
-                start_y + 1 + y, start_x + BOARD_WIDTH * 2 + 1, "|", border_color
-            )
-        # Bottom border
-        stdscr.addstr(
-            start_y + BOARD_HEIGHT + 1,
-            start_x,
-            "+" + "--" * BOARD_WIDTH + "+",
-            border_color,
-        )
+            stdscr.addstr(start_y + 1 + y, start_x + BOARD_WIDTH * 2 + 1, "|", border_color)
+        stdscr.addstr(start_y + BOARD_HEIGHT + 1, start_x, "+" + "--" * BOARD_WIDTH + "+", border_color)
 
-        # Draw board content
         for y, row in enumerate(board):
             for x, cell in enumerate(row):
                 if cell != EMPTY_CELL:
                     color_pair = curses.color_pair(cell + 1)
-                    stdscr.addstr(
-                        start_y + 1 + y, start_x + 1 + x * 2, "[]", color_pair
-                    )
+                    stdscr.addstr(start_y + 1 + y, start_x + 1 + x * 2, "[]", color_pair)
                 else:
-                    stdscr.addstr(
-                        start_y + 1 + y, start_x + 1 + x * 2, "  "
-                    )  # Empty space
+                    stdscr.addstr(start_y + 1 + y, start_x + 1 + x * 2, "  ")
 
-        # Draw Score and Level
         stdscr.addstr(start_y + 2, start_x + board_width + 2, f"Score: {score}")
         stdscr.addstr(start_y + 4, start_x + board_width + 2, f"Level: {level}")
+        stdscr.addstr(start_y + 6, start_x + board_width + 2, f"Combo: {combo_display}")
 
-        # Draw controls
         controls_y = start_y + 7
         stdscr.addstr(controls_y, start_x + board_width + 2, "Controls:")
         stdscr.addstr(controls_y + 1, start_x + board_width + 2, "← → : Move")
@@ -163,111 +137,84 @@ def draw_board(stdscr, board, score, level):
         stdscr.refresh()
         return True
     except curses.error:
-        # If any error occurs, try with a simpler display
         try:
             stdscr.clear()
             stdscr.addstr(0, 0, "Terminal too small! Resize and restart.")
             stdscr.refresh()
         except curses.error:
-            pass  # Give up if even this fails
+            pass
         return False
 
+
 def is_game_over(board):
-    # Check the top two rows of the board for any filled cells.
     for row in board[:2]:
         if any(cell != EMPTY_CELL for cell in row):
             return True
     return False
 
-def check_collision(board, piece, dx=0, dy=0, rotated_shape=None):
-    """Check if piece would collide with board boundaries or other pieces."""
-    # Use provided rotated shape or current shape
-    shape = piece.shape if rotated_shape is None else rotated_shape
 
+def check_collision(board, piece, dx=0, dy=0, rotated_shape=None):
+    shape = piece.shape if rotated_shape is None else rotated_shape
     for y, row in enumerate(shape):
         for x, cell in enumerate(row):
             if cell:
-                # Check board boundaries
                 new_x = piece.x + x + dx
                 new_y = piece.y + y + dy
 
-                # Out of bounds check
                 if new_x < 0 or new_x >= BOARD_WIDTH or new_y >= BOARD_HEIGHT:
                     return True
-
-                # Skip collision check for cells above board
                 if new_y < 0:
                     continue
-
-                # Check collision with other pieces on board
                 if board[new_y][new_x] != EMPTY_CELL:
                     return True
-
     return False
 
 
 def merge_piece(board, piece):
-    """Merge piece into the board."""
     for y, row in enumerate(piece.shape):
         for x, cell in enumerate(row):
-            if cell and piece.y + y >= 0:  # Only merge visible cells
+            if cell and piece.y + y >= 0:
                 board[piece.y + y][piece.x + x] = piece.color
 
 
 def clear_lines(board):
-    """Clear completed lines and return number of lines cleared."""
     lines_cleared = 0
     y = BOARD_HEIGHT - 1
     while y >= 0:
-        if EMPTY_CELL not in board[y]:  # Line is full
+        if EMPTY_CELL not in board[y]:
             lines_cleared += 1
-            # Move all lines above down
             for move_y in range(y, 0, -1):
                 board[move_y] = board[move_y - 1].copy()
-            # Create new empty line at top
             board[0] = [EMPTY_CELL] * BOARD_WIDTH
         else:
             y -= 1
-
     return lines_cleared
 
 
 def calculate_score(lines_cleared, level):
-    """Calculate score based on lines cleared and level."""
     if lines_cleared == 0:
         return 0
-
-    # Classic NES Tetris scoring system
     points_per_line = {1: 40, 2: 100, 3: 300, 4: 1200}
     return points_per_line.get(lines_cleared, 0) * level
 
 
 def draw_piece(stdscr, piece, board, ghost=False):
-    """Draw the current active piece on the board."""
     h, w = stdscr.getmaxyx()
     board_height = BOARD_HEIGHT + 2
     board_width = BOARD_WIDTH * 2 + 2
-
-    # Calculate board position
     start_y = max(0, (h - board_height) // 2)
     start_x = max(0, (w - board_width) // 2)
-
-    # Calculate ghost piece position (drop preview)
     ghost_y = piece.y
     if ghost:
-        # Find where the piece would land if dropped
         drop_distance = 0
         while not check_collision(board, piece, 0, drop_distance + 1):
             drop_distance += 1
         ghost_y = piece.y + drop_distance
 
-    # Draw piece
     for y, row in enumerate(piece.shape):
         for x, cell in enumerate(row):
             if cell:
-                # Only draw if on screen
                 if piece.y + y >= 0:
-                    # Normal piece display
                     color_pair = curses.color_pair(piece.color + 1)
                     try:
                         stdscr.addstr(
@@ -277,14 +224,11 @@ def draw_piece(stdscr, piece, board, ghost=False):
                             color_pair,
                         )
                     except curses.error:
-                        pass  # Ignore errors for off-screen drawing
-
-                # Draw ghost piece (drop preview) if enabled
+                        pass
                 if ghost and piece.y != ghost_y:
                     ghost_display_y = ghost_y + y
-                    if ghost_display_y >= 0 and ghost_display_y < BOARD_HEIGHT:
+                    if 0 <= ghost_display_y < BOARD_HEIGHT:
                         try:
-                            # Ghost piece should be visible but less intense
                             stdscr.addstr(
                                 start_y + 1 + ghost_display_y,
                                 start_x + 1 + (piece.x + x) * 2,
@@ -294,27 +238,19 @@ def draw_piece(stdscr, piece, board, ghost=False):
                         except curses.error:
                             pass
 
+
 def draw_next_and_held(stdscr, next_piece, held_piece, board):
-    """Draw the next piece and held piece previews."""
     h, w = stdscr.getmaxyx()
     board_height = BOARD_HEIGHT + 2
     board_width = BOARD_WIDTH * 2 + 2
-
-    # Calculate board position
     start_y = max(0, (h - board_height) // 2)
     start_x = max(0, (w - board_width) // 2)
-
     preview_y = start_y + 15
     preview_x = start_x + board_width + 2
-
     try:
-        # Next piece preview
         stdscr.addstr(preview_y, preview_x, "Next:")
-
-        # Draw next piece
         next_preview_y = preview_y + 1
         next_preview_x = preview_x + 4
-
         for y, row in enumerate(next_piece.shape):
             for x, cell in enumerate(row):
                 if cell:
@@ -325,15 +261,10 @@ def draw_next_and_held(stdscr, next_piece, held_piece, board):
                         "[]",
                         color_pair
                     )
-
-        # Hold piece preview
         stdscr.addstr(preview_y + 5, preview_x, "Hold:")
-
-        # Draw held piece if exists
         if held_piece:
             held_preview_y = preview_y + 6
             held_preview_x = preview_x + 4
-
             for y, row in enumerate(held_piece.shape):
                 for x, cell in enumerate(row):
                     if cell:
@@ -345,14 +276,13 @@ def draw_next_and_held(stdscr, next_piece, held_piece, board):
                             color_pair
                         )
     except curses.error:
-        pass  # Ignore errors for drawing off-screen
+        pass
 
 
 def main(stdscr):
-    # Curses setup
-    curses.curs_set(0)  # Hide cursor
-    stdscr.nodelay(True)  # Non-blocking input
-    stdscr.timeout(50)  # Refresh delay - reduced for responsive controls
+    curses.curs_set(0)
+    stdscr.nodelay(True)
+    stdscr.timeout(50)
     init_colors()
 
     board = create_board()
@@ -360,60 +290,52 @@ def main(stdscr):
     level = 1
     lines_cleared_total = 0
 
-    # Game variables
+    # For Jstris-style combo tracking:
+    # 'prev_cleared' is True if the previous piece cleared lines.
+    # 'combo_count' is the displayed combo count (0 for the first clear in a chain).
+    prev_cleared = False
+    combo_count = 0
+
     current_piece = Piece()
     next_piece = Piece()
     held_piece = None
     can_hold = True
 
-    # Timing variables
     last_fall_time = time.time()
-    fall_speed = 1.0  # Seconds per step
+    fall_speed = 1.0
     soft_drop = False
 
-    # Lock delay variables
-    lock_delay = 0.5  # Time in seconds before piece locks in place
-    lock_timer = None  # Will be set when piece touches ground
-    landing_y = None  # Position of the piece when it first touches ground
+    lock_delay = 0.5
+    lock_timer = None
+    landing_y = None
 
-    # Input state tracking
     key_left_pressed = False
     key_right_pressed = False
     key_down_pressed = False
-    last_key_time = time.time()  # Track time of last key input
-    last_move_time = time.time()  # Track last movement time
-    move_delay = 0.08  # Delay between movements (for key repeat)
+    last_key_time = time.time()
+    last_move_time = time.time()
+    move_delay = 0.08
 
-    # Key press flags - to detect the first press of a key
     key_left_first_press = False
     key_right_first_press = False
     key_up_first_press = False
 
-    # Initialize previous key to None
     previous_key = None
-
     game_over = False
 
     while not game_over:
-        # Get user input
         current_time = time.time()
         key = stdscr.getch()
-
-        # Check if piece is touching ground
         touching_ground = check_collision(board, current_piece, 0, 1)
 
-        # Reset first press flags if different key is pressed
         if key != -1 and key != previous_key:
-            # Only reset flags for the specific key type
-            if key == curses.KEY_LEFT or key == curses.KEY_RIGHT:
+            if key in (curses.KEY_LEFT, curses.KEY_RIGHT):
                 key_left_first_press = False
                 key_right_first_press = False
             elif key == curses.KEY_UP:
                 key_up_first_press = False
-
             previous_key = key
 
-        # Update key press state
         if key != -1:
             if key == curses.KEY_LEFT:
                 if not key_left_pressed:
@@ -432,11 +354,7 @@ def main(stdscr):
                 key_up_first_press = True
                 last_key_time = current_time
 
-        # Handle key release detection (terminal limitation)
-        # If no key input for a short time, assume keys are released
-        if (
-            current_time - last_key_time > 0.1
-        ):  # Increased timeout to detect key release
+        if current_time - last_key_time > 0.1:
             if key_left_pressed:
                 key_left_pressed = False
                 key_left_first_press = False
@@ -446,58 +364,44 @@ def main(stdscr):
             if key_down_pressed:
                 key_down_pressed = False
 
-        # Update soft drop state
         soft_drop = key_down_pressed
 
-        # Handle rotation (immediately, before movement)
         if key_up_first_press:
-            # Record original right edge (in board coordinates)
             old_right = current_piece.x + len(current_piece.shape[0]) - 1
             rotated = current_piece.rotate()
             rotation_successful = False
-
-            # If the piece is flush with the right wall, try to keep the right edge fixed:
             if old_right == BOARD_WIDTH - 1:
                 new_width = len(rotated[0])
-                # Compute a new x so that the right edge stays fixed
                 adjusted_x = BOARD_WIDTH - new_width
-                old_x = current_piece.x  # backup current x
+                old_x = current_piece.x
                 current_piece.x = adjusted_x
                 if not check_collision(board, current_piece, 0, 0, rotated):
                     current_piece.shape = rotated
                     rotation_successful = True
                 else:
-                    current_piece.x = old_x  # restore original x if collision occurs
-
-            # Fallback if not flush against right wall or previous adjustment failed
+                    current_piece.x = old_x
             if not rotation_successful:
                 if not check_collision(board, current_piece, 0, 0, rotated):
                     current_piece.shape = rotated
                     rotation_successful = True
                 else:
-                    # Try wall kicks: attempt to shift left or right to see if rotation then works
                     for kick in [LEFT, RIGHT]:
                         if not check_collision(board, current_piece, kick["x"], kick["y"], rotated):
                             current_piece.x += kick["x"]
                             current_piece.shape = rotated
                             rotation_successful = True
                             break
-
-            # Reset lock timer if rotated while touching ground
             if rotation_successful and touching_ground:
                 lock_timer = current_time
                 landing_y = current_piece.y
-
             key_up_first_press = False
 
-
-        # Handle initial key press - move only once on initial press
         if key_left_first_press:
             if not check_collision(board, current_piece, LEFT["x"], LEFT["y"]):
                 current_piece.x += LEFT["x"]
                 if touching_ground:
                     lock_timer = current_time
-                    landing_y = current_piece.y  # Update landing y
+                    landing_y = current_piece.y
             key_left_first_press = False
             last_move_time = current_time
 
@@ -506,56 +410,48 @@ def main(stdscr):
                 current_piece.x += RIGHT["x"]
                 if touching_ground:
                     lock_timer = current_time
-                    landing_y = current_piece.y  # Update landing y
+                    landing_y = current_piece.y
             key_right_first_press = False
             last_move_time = current_time
 
-        # Handle repeating movement (left/right) with delay to prevent double moves
         if current_time - last_move_time > move_delay:
-            if (
-                key_left_pressed and not key_left_first_press
-            ):  # Only for repeating moves
+            if key_left_pressed and not key_left_first_press:
                 if not check_collision(board, current_piece, LEFT["x"], LEFT["y"]):
                     current_piece.x += LEFT["x"]
-                    # Reset lock timer if moved while landing
                     if touching_ground:
                         lock_timer = current_time
-                        landing_y = current_piece.y  # Update landing y
+                        landing_y = current_piece.y
                     last_move_time = current_time
-            elif (
-                key_right_pressed and not key_right_first_press
-            ):  # Only for repeating moves
+            elif key_right_pressed and not key_right_first_press:
                 if not check_collision(board, current_piece, RIGHT["x"], RIGHT["y"]):
                     current_piece.x += RIGHT["x"]
-                    # Reset lock timer if moved while landing
                     if touching_ground:
                         lock_timer = current_time
-                        landing_y = current_piece.y  # Update landing y
+                        landing_y = current_piece.y
                     last_move_time = current_time
 
-        # Handle lock delay
         if touching_ground:
-            # If just landed, start lock timer
             if lock_timer is None:
                 lock_timer = current_time
                 landing_y = current_piece.y
-            # If moved horizontally or rotated after landing, reset lock timer
             elif current_piece.y != landing_y:
                 lock_timer = current_time
                 landing_y = current_piece.y
-
-            # If lock delay expired, lock the piece
             if current_time - lock_timer >= lock_delay:
-                # Piece landed, merge it
                 merge_piece(board, current_piece)
                 lines = clear_lines(board)
+                # Update combo based on Jstris rules:
+                if lines > 0:
+                    if prev_cleared:
+                        combo_count += 1
+                    else:
+                        combo_count = 0  # first clear in the chain shows as 0
+                    prev_cleared = True
+                else:
+                    prev_cleared = False
                 score += calculate_score(lines, level)
                 lines_cleared_total += lines
 
-                # Level up every 10 lines
-                level = lines_cleared_total // 10 + 1
-
-                # Reset for next piece
                 current_piece = next_piece
                 next_piece = Piece()
                 can_hold = True
@@ -565,39 +461,35 @@ def main(stdscr):
                 key_left_pressed = False
                 key_right_pressed = False
                 key_down_pressed = False
+                last_fall_time = current_time
 
-                # Check if game over (new piece collides immediately)
                 if is_game_over(board):
                     game_over = True
-
-                # Reset fall timer
-                last_fall_time = current_time
         else:
-            # Not touching ground, clear lock timer
             lock_timer = None
             landing_y = None
 
-        # Handle input - instant actions (single press)
         if key != -1:
-            if key == ord("q"):  # Quit game
+            if key == ord("q"):
                 break
-
-            elif key == ord(" "):  # Hard drop
-                # Move piece down until collision
+            elif key == ord(" "):
                 while not check_collision(board, current_piece, 0, 1):
                     current_piece.y += 1
-                    score += 2  # 2 points per cell dropped
-
-                # Merge immediately without lock delay
+                    score += 2
                 merge_piece(board, current_piece)
                 lines = clear_lines(board)
+                # Update combo for hard drop branch:
+                if lines > 0:
+                    if prev_cleared:
+                        combo_count += 1
+                    else:
+                        combo_count = 0
+                    prev_cleared = True
+                else:
+                    prev_cleared = False
                 score += calculate_score(lines, level)
                 lines_cleared_total += lines
 
-                # Level up every 10 lines
-                level = lines_cleared_total // 10 + 1
-
-                # Reset for next piece
                 current_piece = next_piece
                 next_piece = Piece()
                 can_hold = True
@@ -609,54 +501,41 @@ def main(stdscr):
                 key_down_pressed = False
                 last_fall_time = current_time
 
-                # Check if game over (new piece collides immediately)
                 if check_collision(board, current_piece):
                     game_over = True
-
-            elif key == ord("c"):  # Hold piece
+            elif key == ord("c"):
                 if can_hold:
                     if held_piece is None:
                         held_piece = Piece(current_piece.type)
                         current_piece = next_piece
                         next_piece = Piece()
                     else:
-                        current_piece, held_piece = Piece(held_piece.type), Piece(
-                            current_piece.type
-                        )
+                        current_piece, held_piece = Piece(held_piece.type), Piece(current_piece.type)
                     can_hold = False
                     lock_timer = None
                     landing_y = None
                     last_fall_time = current_time
 
-        # Handle automatic falling (only if not already waiting to lock)
         if not touching_ground:
             fall_delay = fall_speed / level
             if soft_drop:
-                fall_delay *= (
-                    0.1  # Fall 10x faster with soft drop (was 0.2 - 5x faster)
-                )
-
+                fall_delay *= 0.1
             if current_time - last_fall_time > fall_delay:
-                # Move piece down
                 current_piece.y += 1
                 if soft_drop:
-                    score += 1  # 1 point per cell dropped (soft drop)
+                    score += 1
                 last_fall_time = current_time
 
-        # --- Drawing ---
-        # First draw the static board
-        if not draw_board(stdscr, board, score, level):
-            # Terminal too small, wait for user to resize
-            time.sleep(1)  # Throttle refresh attempts
+        # Determine combo display: show '-' if no active combo
+        combo_display = f"{combo_count}" if prev_cleared else "-"
+        if not draw_board(stdscr, board, score, level, combo_display):
+            time.sleep(1)
             continue
 
-        # Then draw the active piece with ghost (drop preview)
         draw_piece(stdscr, current_piece, board, ghost=True)
-
-        # Draw next and held piece previews
         draw_next_and_held(stdscr, next_piece, held_piece, board)
 
-    return score  # Return the score for game over display
+    return score
 
 
 if __name__ == "__main__":
