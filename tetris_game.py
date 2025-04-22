@@ -3,14 +3,16 @@ import time
 import random
 import copy
 import locale
+
 locale.setlocale(locale.LC_ALL, '')
 
-# Constants
+# ------------------ Constants and Tetrimino Definitions ------------------ #
+
 BOARD_WIDTH = 10
 BOARD_HEIGHT = 20
 EMPTY_CELL = 0
 
-# Tetromino shapes with corresponding color indices (1-7)
+# Each tetromino has a shape and a color (color indices 1-7)
 TETROMINOES = {
     "I": {"shape": [[1, 1, 1, 1]], "color": 1},
     "O": {"shape": [[2, 2], [2, 2]], "color": 2},
@@ -29,7 +31,7 @@ COLORS = {
     4: curses.COLOR_GREEN,  # S
     5: curses.COLOR_RED,    # Z
     6: curses.COLOR_BLUE,   # J
-    7: curses.COLOR_WHITE,  # L (using white instead of orange for better visibility)
+    7: curses.COLOR_WHITE,  # L
     8: curses.COLOR_WHITE,  # Border
 }
 
@@ -38,25 +40,22 @@ LEFT = {"x": -1, "y": 0}
 RIGHT = {"x": 1, "y": 0}
 DOWN = {"x": 0, "y": 1}
 
+# -------------------------- Piece Class -------------------------- #
 
 class Piece:
-    def __init__(self, tetromino_type=None):
-        if tetromino_type is None:
-            tetromino_type = random.choice(list(TETROMINOES.keys()))
+    def __init__(self, tetromino_type):
         self.type = tetromino_type
         self.shape = copy.deepcopy(TETROMINOES[tetromino_type]["shape"])
         self.color = TETROMINOES[tetromino_type]["color"]
 
-        # Position on board (top center)
+        # Position the piece at the top center of the board
         self.x = BOARD_WIDTH // 2 - len(self.shape[0]) // 2
         self.y = 0
-
-        # Handle I piece special case (needs to start higher)
         if tetromino_type == "I":
             self.y = -1
 
     def rotate(self):
-        """Rotate the piece 90 degrees clockwise."""
+        """Rotate the piece clockwise 90 degrees."""
         rows, cols = len(self.shape), len(self.shape[0])
         rotated = [[0 for _ in range(rows)] for _ in range(cols)]
         for r in range(rows):
@@ -65,7 +64,7 @@ class Piece:
         return rotated
 
     def get_positions(self):
-        """Get the board positions occupied by the piece."""
+        """Return board positions occupied by this piece."""
         positions = []
         for y, row in enumerate(self.shape):
             for x, cell in enumerate(row):
@@ -73,25 +72,23 @@ class Piece:
                     positions.append({"x": self.x + x, "y": self.y + y})
         return positions
 
+# ------------------ Drawing and Utility Functions ------------------ #
 
 def init_colors():
     curses.start_color()
     for i, color in COLORS.items():
         curses.init_pair(i + 1, color, curses.COLOR_BLACK)
 
-
 def create_board():
     return [[EMPTY_CELL for _ in range(BOARD_WIDTH)] for _ in range(BOARD_HEIGHT)]
-
 
 def draw_board(stdscr, board, score, level, combo_display):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
+    board_height = BOARD_HEIGHT + 2
+    board_width = BOARD_WIDTH * 2 + 2
 
-    board_height = BOARD_HEIGHT + 2  # including borders
-    board_width = BOARD_WIDTH * 2 + 2  # each cell 2 chars wide + borders
-
-    if h < board_height or w < board_width + 15:  # +15 for text
+    if h < board_height or w < board_width + 15:
         stdscr.clear()
         error_msg = "Terminal too small! Resize and restart."
         try:
@@ -104,15 +101,17 @@ def draw_board(stdscr, board, score, level, combo_display):
 
     start_y = max(0, (h - board_height) // 2)
     start_x = max(0, (w - board_width) // 2)
-
     border_color = curses.color_pair(8 + 1)
+
     try:
+        # Draw border
         stdscr.addstr(start_y, start_x, "+" + "--" * BOARD_WIDTH + "+", border_color)
         for y in range(BOARD_HEIGHT):
             stdscr.addstr(start_y + 1 + y, start_x, "|", border_color)
             stdscr.addstr(start_y + 1 + y, start_x + BOARD_WIDTH * 2 + 1, "|", border_color)
         stdscr.addstr(start_y + BOARD_HEIGHT + 1, start_x, "+" + "--" * BOARD_WIDTH + "+", border_color)
 
+        # Draw board cells
         for y, row in enumerate(board):
             for x, cell in enumerate(row):
                 if cell != EMPTY_CELL:
@@ -121,6 +120,7 @@ def draw_board(stdscr, board, score, level, combo_display):
                 else:
                     stdscr.addstr(start_y + 1 + y, start_x + 1 + x * 2, "  ")
 
+        # Dashboard: Score, Level, and Combo
         stdscr.addstr(start_y + 2, start_x + board_width + 2, f"Score: {score}")
         stdscr.addstr(start_y + 4, start_x + board_width + 2, f"Level: {level}")
         stdscr.addstr(start_y + 6, start_x + board_width + 2, f"Combo: {combo_display}")
@@ -136,6 +136,7 @@ def draw_board(stdscr, board, score, level, combo_display):
 
         stdscr.refresh()
         return True
+
     except curses.error:
         try:
             stdscr.clear()
@@ -145,13 +146,11 @@ def draw_board(stdscr, board, score, level, combo_display):
             pass
         return False
 
-
 def is_game_over(board):
     for row in board[:2]:
         if any(cell != EMPTY_CELL for cell in row):
             return True
     return False
-
 
 def check_collision(board, piece, dx=0, dy=0, rotated_shape=None):
     shape = piece.shape if rotated_shape is None else rotated_shape
@@ -160,7 +159,6 @@ def check_collision(board, piece, dx=0, dy=0, rotated_shape=None):
             if cell:
                 new_x = piece.x + x + dx
                 new_y = piece.y + y + dy
-
                 if new_x < 0 or new_x >= BOARD_WIDTH or new_y >= BOARD_HEIGHT:
                     return True
                 if new_y < 0:
@@ -169,13 +167,11 @@ def check_collision(board, piece, dx=0, dy=0, rotated_shape=None):
                     return True
     return False
 
-
 def merge_piece(board, piece):
     for y, row in enumerate(piece.shape):
         for x, cell in enumerate(row):
             if cell and piece.y + y >= 0:
                 board[piece.y + y][piece.x + x] = piece.color
-
 
 def clear_lines(board):
     lines_cleared = 0
@@ -190,13 +186,11 @@ def clear_lines(board):
             y -= 1
     return lines_cleared
 
-
 def calculate_score(lines_cleared, level):
     if lines_cleared == 0:
         return 0
     points_per_line = {1: 40, 2: 100, 3: 300, 4: 1200}
     return points_per_line.get(lines_cleared, 0) * level
-
 
 def draw_piece(stdscr, piece, board, ghost=False):
     h, w = stdscr.getmaxyx()
@@ -217,27 +211,20 @@ def draw_piece(stdscr, piece, board, ghost=False):
                 if piece.y + y >= 0:
                     color_pair = curses.color_pair(piece.color + 1)
                     try:
-                        stdscr.addstr(
-                            start_y + 1 + piece.y + y,
-                            start_x + 1 + (piece.x + x) * 2,
-                            "[]",
-                            color_pair,
-                        )
+                        stdscr.addstr(start_y + 1 + piece.y + y,
+                                      start_x + 1 + (piece.x + x) * 2,
+                                      "[]", color_pair)
                     except curses.error:
                         pass
                 if ghost and piece.y != ghost_y:
                     ghost_display_y = ghost_y + y
                     if 0 <= ghost_display_y < BOARD_HEIGHT:
                         try:
-                            stdscr.addstr(
-                                start_y + 1 + ghost_display_y,
-                                start_x + 1 + (piece.x + x) * 2,
-                                "[]",
-                                curses.A_DIM,
-                            )
+                            stdscr.addstr(start_y + 1 + ghost_display_y,
+                                          start_x + 1 + (piece.x + x) * 2,
+                                          "[]", curses.A_DIM)
                         except curses.error:
                             pass
-
 
 def draw_next_and_held(stdscr, next_piece, held_piece, board):
     h, w = stdscr.getmaxyx()
@@ -247,6 +234,7 @@ def draw_next_and_held(stdscr, next_piece, held_piece, board):
     start_x = max(0, (w - board_width) // 2)
     preview_y = start_y + 15
     preview_x = start_x + board_width + 2
+
     try:
         stdscr.addstr(preview_y, preview_x, "Next:")
         next_preview_y = preview_y + 1
@@ -255,12 +243,9 @@ def draw_next_and_held(stdscr, next_piece, held_piece, board):
             for x, cell in enumerate(row):
                 if cell:
                     color_pair = curses.color_pair(next_piece.color + 1)
-                    stdscr.addstr(
-                        next_preview_y + y,
-                        next_preview_x + x * 2,
-                        "[]",
-                        color_pair
-                    )
+                    stdscr.addstr(next_preview_y + y,
+                                  next_preview_x + x * 2,
+                                  "[]", color_pair)
         stdscr.addstr(preview_y + 5, preview_x, "Hold:")
         if held_piece:
             held_preview_y = preview_y + 6
@@ -269,17 +254,30 @@ def draw_next_and_held(stdscr, next_piece, held_piece, board):
                 for x, cell in enumerate(row):
                     if cell:
                         color_pair = curses.color_pair(held_piece.color + 1)
-                        stdscr.addstr(
-                            held_preview_y + y,
-                            held_preview_x + x * 2,
-                            "[]",
-                            color_pair
-                        )
+                        stdscr.addstr(held_preview_y + y,
+                                      held_preview_x + x * 2,
+                                      "[]", color_pair)
     except curses.error:
         pass
 
+# --------------------- Piece Generator --------------------- #
+def create_piece_generator(seed):
+    """
+    Returns a function that generates pieces using an RNG initialized with the provided seed.
+    This ensures that every client will get the same sequence.
+    """
+    rng = random.Random(seed)
+    def get_next_piece():
+        tetromino_type = rng.choice(list(TETROMINOES.keys()))
+        return Piece(tetromino_type)
+    return get_next_piece
 
-def main(stdscr):
+# --------------------- Main Game Loop Function --------------------- #
+
+def run_game(get_next_piece):
+    # Initialize curses and set up the screen.
+    stdscr = curses.initscr()
+    stdscr.keypad(True)
     curses.curs_set(0)
     stdscr.nodelay(True)
     stdscr.timeout(50)
@@ -290,14 +288,12 @@ def main(stdscr):
     level = 1
     lines_cleared_total = 0
 
-    # For Jstris-style combo tracking:
-    # 'prev_cleared' is True if the previous piece cleared lines.
-    # 'combo_count' is the displayed combo count (0 for the first clear in a chain).
+    # For Jstris-style combo tracking
     prev_cleared = False
     combo_count = 0
 
-    current_piece = Piece()
-    next_piece = Piece()
+    current_piece = get_next_piece()
+    next_piece = get_next_piece()
     held_piece = None
     can_hold = True
 
@@ -323,222 +319,222 @@ def main(stdscr):
     previous_key = None
     game_over = False
 
-    while not game_over:
-        current_time = time.time()
-        key = stdscr.getch()
-        touching_ground = check_collision(board, current_piece, 0, 1)
+    try:
+        while not game_over:
+            current_time = time.time()
+            key = stdscr.getch()
+            touching_ground = check_collision(board, current_piece, 0, 1)
 
-        if key != -1 and key != previous_key:
-            if key in (curses.KEY_LEFT, curses.KEY_RIGHT):
-                key_left_first_press = False
-                key_right_first_press = False
-            elif key == curses.KEY_UP:
+            if key != -1 and key != previous_key:
+                if key in (curses.KEY_LEFT, curses.KEY_RIGHT):
+                    key_left_first_press = False
+                    key_right_first_press = False
+                elif key == curses.KEY_UP:
+                    key_up_first_press = False
+                previous_key = key
+
+            if key != -1:
+                if key == curses.KEY_LEFT:
+                    if not key_left_pressed:
+                        key_left_first_press = True
+                    key_left_pressed = True
+                    last_key_time = current_time
+                elif key == curses.KEY_RIGHT:
+                    if not key_right_pressed:
+                        key_right_first_press = True
+                    key_right_pressed = True
+                    last_key_time = current_time
+                elif key == curses.KEY_DOWN:
+                    key_down_pressed = True
+                    last_key_time = current_time
+                elif key == curses.KEY_UP:
+                    key_up_first_press = True
+                    last_key_time = current_time
+
+            if current_time - last_key_time > 0.1:
+                if key_left_pressed:
+                    key_left_pressed = False
+                    key_left_first_press = False
+                if key_right_pressed:
+                    key_right_pressed = False
+                    key_right_first_press = False
+                if key_down_pressed:
+                    key_down_pressed = False
+
+            soft_drop = key_down_pressed
+
+            if key_up_first_press:
+                old_right = current_piece.x + len(current_piece.shape[0]) - 1
+                rotated = current_piece.rotate()
+                rotation_successful = False
+                if old_right == BOARD_WIDTH - 1:
+                    new_width = len(rotated[0])
+                    adjusted_x = BOARD_WIDTH - new_width
+                    old_x = current_piece.x
+                    current_piece.x = adjusted_x
+                    if not check_collision(board, current_piece, 0, 0, rotated):
+                        current_piece.shape = rotated
+                        rotation_successful = True
+                    else:
+                        current_piece.x = old_x
+                if not rotation_successful:
+                    if not check_collision(board, current_piece, 0, 0, rotated):
+                        current_piece.shape = rotated
+                        rotation_successful = True
+                    else:
+                        for kick in [LEFT, RIGHT]:
+                            if not check_collision(board, current_piece, kick["x"], kick["y"], rotated):
+                                current_piece.x += kick["x"]
+                                current_piece.shape = rotated
+                                rotation_successful = True
+                                break
+                if rotation_successful and touching_ground:
+                    lock_timer = current_time
+                    landing_y = current_piece.y
                 key_up_first_press = False
-            previous_key = key
 
-        if key != -1:
-            if key == curses.KEY_LEFT:
-                if not key_left_pressed:
-                    key_left_first_press = True
-                key_left_pressed = True
-                last_key_time = current_time
-            elif key == curses.KEY_RIGHT:
-                if not key_right_pressed:
-                    key_right_first_press = True
-                key_right_pressed = True
-                last_key_time = current_time
-            elif key == curses.KEY_DOWN:
-                key_down_pressed = True
-                last_key_time = current_time
-            elif key == curses.KEY_UP:
-                key_up_first_press = True
-                last_key_time = current_time
-
-        if current_time - last_key_time > 0.1:
-            if key_left_pressed:
-                key_left_pressed = False
-                key_left_first_press = False
-            if key_right_pressed:
-                key_right_pressed = False
-                key_right_first_press = False
-            if key_down_pressed:
-                key_down_pressed = False
-
-        soft_drop = key_down_pressed
-
-        if key_up_first_press:
-            old_right = current_piece.x + len(current_piece.shape[0]) - 1
-            rotated = current_piece.rotate()
-            rotation_successful = False
-            if old_right == BOARD_WIDTH - 1:
-                new_width = len(rotated[0])
-                adjusted_x = BOARD_WIDTH - new_width
-                old_x = current_piece.x
-                current_piece.x = adjusted_x
-                if not check_collision(board, current_piece, 0, 0, rotated):
-                    current_piece.shape = rotated
-                    rotation_successful = True
-                else:
-                    current_piece.x = old_x
-            if not rotation_successful:
-                if not check_collision(board, current_piece, 0, 0, rotated):
-                    current_piece.shape = rotated
-                    rotation_successful = True
-                else:
-                    for kick in [LEFT, RIGHT]:
-                        if not check_collision(board, current_piece, kick["x"], kick["y"], rotated):
-                            current_piece.x += kick["x"]
-                            current_piece.shape = rotated
-                            rotation_successful = True
-                            break
-            if rotation_successful and touching_ground:
-                lock_timer = current_time
-                landing_y = current_piece.y
-            key_up_first_press = False
-
-        if key_left_first_press:
-            if not check_collision(board, current_piece, LEFT["x"], LEFT["y"]):
-                current_piece.x += LEFT["x"]
-                if touching_ground:
-                    lock_timer = current_time
-                    landing_y = current_piece.y
-            key_left_first_press = False
-            last_move_time = current_time
-
-        if key_right_first_press:
-            if not check_collision(board, current_piece, RIGHT["x"], RIGHT["y"]):
-                current_piece.x += RIGHT["x"]
-                if touching_ground:
-                    lock_timer = current_time
-                    landing_y = current_piece.y
-            key_right_first_press = False
-            last_move_time = current_time
-
-        if current_time - last_move_time > move_delay:
-            if key_left_pressed and not key_left_first_press:
+            if key_left_first_press:
                 if not check_collision(board, current_piece, LEFT["x"], LEFT["y"]):
                     current_piece.x += LEFT["x"]
                     if touching_ground:
                         lock_timer = current_time
                         landing_y = current_piece.y
-                    last_move_time = current_time
-            elif key_right_pressed and not key_right_first_press:
+                key_left_first_press = False
+                last_move_time = current_time
+
+            if key_right_first_press:
                 if not check_collision(board, current_piece, RIGHT["x"], RIGHT["y"]):
                     current_piece.x += RIGHT["x"]
                     if touching_ground:
                         lock_timer = current_time
                         landing_y = current_piece.y
-                    last_move_time = current_time
+                key_right_first_press = False
+                last_move_time = current_time
 
-        if touching_ground:
-            if lock_timer is None:
-                lock_timer = current_time
-                landing_y = current_piece.y
-            elif current_piece.y != landing_y:
-                lock_timer = current_time
-                landing_y = current_piece.y
-            if current_time - lock_timer >= lock_delay:
-                merge_piece(board, current_piece)
-                lines = clear_lines(board)
-                # Update combo based on Jstris rules:
-                if lines > 0:
-                    if prev_cleared:
-                        combo_count += 1
+            if current_time - last_move_time > move_delay:
+                if key_left_pressed and not key_left_first_press:
+                    if not check_collision(board, current_piece, LEFT["x"], LEFT["y"]):
+                        current_piece.x += LEFT["x"]
+                        if touching_ground:
+                            lock_timer = current_time
+                            landing_y = current_piece.y
+                        last_move_time = current_time
+                elif key_right_pressed and not key_right_first_press:
+                    if not check_collision(board, current_piece, RIGHT["x"], RIGHT["y"]):
+                        current_piece.x += RIGHT["x"]
+                        if touching_ground:
+                            lock_timer = current_time
+                            landing_y = current_piece.y
+                        last_move_time = current_time
+
+            if touching_ground:
+                if lock_timer is None:
+                    lock_timer = current_time
+                    landing_y = current_piece.y
+                elif current_piece.y != landing_y:
+                    lock_timer = current_time
+                    landing_y = current_piece.y
+                if current_time - lock_timer >= lock_delay:
+                    merge_piece(board, current_piece)
+                    lines = clear_lines(board)
+                    if lines > 0:
+                        if prev_cleared:
+                            combo_count += 1
+                        else:
+                            combo_count = 0
+                        prev_cleared = True
                     else:
-                        combo_count = 0  # first clear in the chain shows as 0
-                    prev_cleared = True
-                else:
-                    prev_cleared = False
-                score += calculate_score(lines, level)
-                lines_cleared_total += lines
-
-                current_piece = next_piece
-                next_piece = Piece()
-                can_hold = True
-                soft_drop = False
-                lock_timer = None
-                landing_y = None
-                key_left_pressed = False
-                key_right_pressed = False
-                key_down_pressed = False
-                last_fall_time = current_time
-
-                if is_game_over(board):
-                    game_over = True
-        else:
-            lock_timer = None
-            landing_y = None
-
-        if key != -1:
-            if key == ord("q"):
-                break
-            elif key == ord(" "):
-                while not check_collision(board, current_piece, 0, 1):
-                    current_piece.y += 1
-                    score += 2
-                merge_piece(board, current_piece)
-                lines = clear_lines(board)
-                # Update combo for hard drop branch:
-                if lines > 0:
-                    if prev_cleared:
-                        combo_count += 1
-                    else:
-                        combo_count = 0
-                    prev_cleared = True
-                else:
-                    prev_cleared = False
-                score += calculate_score(lines, level)
-                lines_cleared_total += lines
-
-                current_piece = next_piece
-                next_piece = Piece()
-                can_hold = True
-                soft_drop = False
-                lock_timer = None
-                landing_y = None
-                key_left_pressed = False
-                key_right_pressed = False
-                key_down_pressed = False
-                last_fall_time = current_time
-
-                if check_collision(board, current_piece):
-                    game_over = True
-            elif key == ord("c"):
-                if can_hold:
-                    if held_piece is None:
-                        held_piece = Piece(current_piece.type)
-                        current_piece = next_piece
-                        next_piece = Piece()
-                    else:
-                        current_piece, held_piece = Piece(held_piece.type), Piece(current_piece.type)
-                    can_hold = False
+                        prev_cleared = False
+                    score += calculate_score(lines, level)
+                    lines_cleared_total += lines
+                    current_piece = next_piece
+                    next_piece = get_next_piece()
+                    can_hold = True
+                    soft_drop = False
                     lock_timer = None
                     landing_y = None
+                    key_left_pressed = False
+                    key_right_pressed = False
+                    key_down_pressed = False
                     last_fall_time = current_time
 
-        if not touching_ground:
-            fall_delay = fall_speed / level
-            if soft_drop:
-                fall_delay *= 0.1
-            if current_time - last_fall_time > fall_delay:
-                current_piece.y += 1
+                    if is_game_over(board):
+                        game_over = True
+            else:
+                lock_timer = None
+                landing_y = None
+
+            if key != -1:
+                if key == ord("q"):
+                    break
+                elif key == ord(" "):
+                    while not check_collision(board, current_piece, 0, 1):
+                        current_piece.y += 1
+                        score += 2
+                    merge_piece(board, current_piece)
+                    lines = clear_lines(board)
+                    if lines > 0:
+                        if prev_cleared:
+                            combo_count += 1
+                        else:
+                            combo_count = 0
+                        prev_cleared = True
+                    else:
+                        prev_cleared = False
+                    score += calculate_score(lines, level)
+                    lines_cleared_total += lines
+                    current_piece = next_piece
+                    next_piece = get_next_piece()
+                    can_hold = True
+                    soft_drop = False
+                    lock_timer = None
+                    landing_y = None
+                    key_left_pressed = False
+                    key_right_pressed = False
+                    key_down_pressed = False
+                    last_fall_time = current_time
+
+                    if check_collision(board, current_piece):
+                        game_over = True
+                elif key == ord("c"):
+                    if can_hold:
+                        if held_piece is None:
+                            held_piece = Piece(current_piece.type)
+                            current_piece = next_piece
+                            next_piece = get_next_piece()
+                        else:
+                            current_piece, held_piece = Piece(held_piece.type), Piece(current_piece.type)
+                        can_hold = False
+                        lock_timer = None
+                        landing_y = None
+                        last_fall_time = current_time
+
+            if not touching_ground:
+                fall_delay = fall_speed / level
                 if soft_drop:
-                    score += 1
-                last_fall_time = current_time
+                    fall_delay *= 0.1
+                if current_time - last_fall_time > fall_delay:
+                    current_piece.y += 1
+                    if soft_drop:
+                        score += 1
+                    last_fall_time = current_time
 
-        # Determine combo display: show '-' if no active combo
-        combo_display = f"{combo_count}" if prev_cleared else "-"
-        if not draw_board(stdscr, board, score, level, combo_display):
-            time.sleep(1)
-            continue
+            combo_display = f"{combo_count}" if prev_cleared else "-"
+            if not draw_board(stdscr, board, score, level, combo_display):
+                time.sleep(1)
+                continue
 
-        draw_piece(stdscr, current_piece, board, ghost=True)
-        draw_next_and_held(stdscr, next_piece, held_piece, board)
+            draw_piece(stdscr, current_piece, board, ghost=True)
+            draw_next_and_held(stdscr, next_piece, held_piece, board)
+        return score
+    finally:
+        curses.endwin()
 
-    return score
-
-
+# If run standalone (without network), use local random seed.
 if __name__ == "__main__":
-    final_score = curses.wrapper(main)
+    # Use a default seed for local play.
+    seed = random.randint(0, 1000000)
+    get_next_piece = create_piece_generator(seed)
+    final_score = run_game(get_next_piece)
     print("Game Over!")
     print(f"Final Score: {final_score}")
