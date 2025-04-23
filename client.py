@@ -28,27 +28,27 @@ if __name__ == "__main__":
     ready_sent = False
     printed_prompt = False
 
+    # Wait for the game seed before starting.
     while waiting_for_game:
-        # Check for seed from the server (non-blocking)
         try:
-            seed = seed_queue.get_nowait()
-            if seed is None:
+            seed_or_message = seed_queue.get_nowait()
+            if isinstance(seed_or_message, int):
+                seed = seed_or_message
+                waiting_for_game = False
+                break
+            elif seed_or_message is None:
                 print("Could not join game. Exiting.")
                 client_socket.close()
                 sys.exit(1)
-            waiting_for_game = False
-            break  # Exit loop; game is starting
         except queue.Empty:
-            pass  # No seed yet; continue with command loop
+            pass
 
         if not printed_prompt:
             print("> ", end="", flush=True)
             printed_prompt = True
 
-        # Wait for input with a 1-second timeout
         rlist, _, _ = select.select([sys.stdin], [], [], 1)
         if rlist:
-            # User pressed a key; read the input and reset the prompt flag
             cmd = sys.stdin.readline().strip().lower()
             printed_prompt = False
             if cmd == "ready" and not ready_sent:
@@ -67,20 +67,46 @@ if __name__ == "__main__":
             else:
                 print("Unknown command. Type 'help' for available commands.")
 
-    print("Game is starting!")
-    
+    # If still waiting, try to get the seed from the queue.
     if waiting_for_game:
-        seed = seed_queue.get()
-        if seed is None:
+        seed_or_message = seed_queue.get()
+        if seed_or_message is None:
             print("Could not join game. Exiting.")
             client_socket.close()
             sys.exit(1)
-    
+        elif isinstance(seed_or_message, int):
+            seed = seed_or_message
+        else:
+            seed = None
+
     print(f"Received game seed: {seed}")
     
     get_next_piece = create_piece_generator(seed)
     final_score = run_game(get_next_piece)
-    print("Game Over!")
+    print("Your game has ended!")
     print(f"Final Score: {final_score}")
+
+    # Notify the server that this client has finished.
+    client_socket.sendall(f"LOSE:{final_score}\n".encode())
     
+    # Wait indefinitely for the final GAME_RESULTS message.
+    print("Waiting for final game results from the server...\n")
+    game_results = None
+    while True:
+        try:
+            message = seed_queue.get()
+            if isinstance(message, str) and message.startswith("GAME_RESULTS:"):
+                game_results = message[len("GAME_RESULTS:"):].strip()
+                break
+        except KeyboardInterrupt:
+            print("Interrupted while waiting for final results.")
+            break
+
+    if game_results:
+        print("\n=== GAME RESULTS ===")
+        print(game_results)
+        print("====================\n")
+    else:
+        print("No final game results received.")
+
     client_socket.close()

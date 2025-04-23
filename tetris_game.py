@@ -7,7 +7,6 @@ import locale
 locale.setlocale(locale.LC_ALL, '')
 
 # ------------------ Constants and Tetrimino Definitions ------------------ #
-
 BOARD_WIDTH = 10
 BOARD_HEIGHT = 20
 EMPTY_CELL = 0
@@ -41,7 +40,6 @@ RIGHT = {"x": 1, "y": 0}
 DOWN = {"x": 0, "y": 1}
 
 # -------------------------- Piece Class -------------------------- #
-
 class Piece:
     def __init__(self, tetromino_type):
         self.type = tetromino_type
@@ -73,7 +71,6 @@ class Piece:
         return positions
 
 # ------------------ Drawing and Utility Functions ------------------ #
-
 def init_colors():
     curses.start_color()
     for i, color in COLORS.items():
@@ -260,11 +257,9 @@ def draw_next_and_held(stdscr, next_piece, held_piece, board):
     except curses.error:
         pass
 
-# --------------------- Piece Generator --------------------- #
 def create_piece_generator(seed):
     """
     Returns a function that generates pieces using an RNG initialized with the provided seed.
-    This ensures that every client will get the same sequence.
     """
     rng = random.Random(seed)
     def get_next_piece():
@@ -272,10 +267,7 @@ def create_piece_generator(seed):
         return Piece(tetromino_type)
     return get_next_piece
 
-# --------------------- Main Game Loop Function --------------------- #
-
 def run_game(get_next_piece):
-    # Initialize curses and set up the screen.
     stdscr = curses.initscr()
     stdscr.keypad(True)
     curses.curs_set(0)
@@ -288,7 +280,7 @@ def run_game(get_next_piece):
     level = 1
     lines_cleared_total = 0
 
-    # For Jstris-style combo tracking
+    # For combo tracking
     prev_cleared = False
     combo_count = 0
 
@@ -459,7 +451,17 @@ def run_game(get_next_piece):
                     last_fall_time = current_time
 
                     if is_game_over(board):
+                        # Finalize the board, then display a game-over screen for this client
+                        merge_piece(board, current_piece)
+                        draw_board(stdscr, board, score, level, f"{combo_count}" if prev_cleared else "-")
+                        h, w = stdscr.getmaxyx()
+                        msg = "GAME OVER! Press any key..."
+                        stdscr.addstr(h//2, max(0, (w - len(msg)) // 2), msg, curses.A_BOLD)
+                        stdscr.refresh()
+                        stdscr.nodelay(False)
+                        stdscr.getch()
                         game_over = True
+                        break
             else:
                 lock_timer = None
                 landing_y = None
@@ -495,7 +497,16 @@ def run_game(get_next_piece):
                     last_fall_time = current_time
 
                     if check_collision(board, current_piece):
+                        merge_piece(board, current_piece)
+                        draw_board(stdscr, board, score, level, f"{combo_count}" if prev_cleared else "-")
+                        h, w = stdscr.getmaxyx()
+                        msg = "GAME OVER! Press any key..."
+                        stdscr.addstr(h//2, max(0, (w - len(msg)) // 2), msg, curses.A_BOLD)
+                        stdscr.refresh()
+                        stdscr.nodelay(False)
+                        stdscr.getch()
                         game_over = True
+                        break
                 elif key == ord("c"):
                     if can_hold:
                         if held_piece is None:
@@ -532,7 +543,6 @@ def run_game(get_next_piece):
 
 # If run standalone (without network), use local random seed.
 if __name__ == "__main__":
-    # Use a default seed for local play.
     seed = random.randint(0, 1000000)
     get_next_piece = create_piece_generator(seed)
     final_score = run_game(get_next_piece)
