@@ -70,7 +70,6 @@ def handle_client(client):
             for line in data.splitlines():
                 line = line.strip().upper()
                 print(f"Processing line from {client_addr}: '{line}'")
-                
                 if line == "READY":
                     with lock:
                         room_clients[client] = True
@@ -78,7 +77,6 @@ def handle_client(client):
                         print(f"Client {client_addr} marked as READY ({ready_count}/{len(room_clients)} ready)")
                         if (len(room_clients) >= MAX_PLAYERS and all(room_clients.values()) and not game_started):
                             start_game()
-                
                 elif line == "START":
                     with lock:
                         if not game_started:
@@ -100,15 +98,14 @@ def handle_client(client):
                 else:
                     print(f"Unrecognized command from {client_addr}: '{line}'")
     except Exception as e:
-        print(f"Error in handle_client for {client_addr}: {e}")
+        print(f"Error in handle_client for {client.getpeername()}: {e}")
     finally:
         with lock:
             if client in room_clients:
                 del room_clients[client]
-                print(f"Client {client_addr} removed from room")
-            # In case a client disconnects without sending its score.
-            if client_addr not in players_results:
-                players_results[client_addr] = 0
+                print(f"Client {client.getpeername()} removed from room")
+            if client.getpeername() not in players_results:
+                players_results[client.getpeername()] = 0
             if game_started and not room_clients:
                 reset_game_state()
 
@@ -144,18 +141,20 @@ def broadcast_message(message):
 
 def broadcast_results():
     """
-    Compile the final results from all players and broadcast to everyone.
+    Compile the final results from all players and broadcast to everyone,
+    then reset the game state so that new rounds can start.
     """
-    global players_results
-    results = "GAME_RESULTS:"
-    # Sort results by score (highest first)
+    global players_results, game_started, game_seed
+    # Sort results by highest to lowest score
     sorted_results = sorted(players_results.items(), key=lambda item: item[1], reverse=True)
-    results_list = "\n".join(f"{addr}: {score}" for addr, score in sorted_results)
-    results += "\n" + results_list
-    print("Broadcasting final results:\n" + results)
+    results_list = " | ".join(f"{addr}: {score}" for addr, score in sorted_results)
+    results = "GAME_RESULTS:" + results_list
+    print("Broadcasting final results: " + results)
     broadcast_message(results)
-    # Reset results for next game
-    players_results = {}
+    
+    # Reset game state in preparation for new round
+    reset_game_state()
+
 
 # ----------------------- Client Functions ----------------------- #
 def connect_to_server(host, port=DEFAULT_PORT):
@@ -189,6 +188,12 @@ def client_listener(client_socket):
                     seed_queue.put(None)
                 elif line.startswith("GAME_RESULTS:"):
                     seed_queue.put(line)
+        except OSError as e:
+            if e.errno == 9:  # Ignore bad file descriptor error
+                break
+            else:
+                print("Client listener error:", e)
+                break
         except Exception as e:
             print("Client listener error:", e)
             break

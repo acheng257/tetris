@@ -12,23 +12,30 @@ def print_help():
     print("  quit     - Exit the program")
     print()
 
-if __name__ == "__main__":
-    host = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_HOST
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_PORT
+def clear_seed_queue():
+    """Empty the seed_queue so that old messages don’t interfere."""
+    while not seed_queue.empty():
+        try:
+            seed_queue.get_nowait()
+        except queue.Empty:
+            break
 
-    try:
-        client_socket = connect_to_server(host, port)
-    except ConnectionRefusedError:
-        print(f"Could not connect to server at {host}:{port}")
-        sys.exit(1)
-    
+def run_lobby(existing_socket=None):
+    """
+    Show the lobby interface and wait for a game seed.
+    If an existing socket is provided, it is reused.
+    """
+    if existing_socket is None:
+        client_socket = connect_to_server(DEFAULT_HOST, DEFAULT_PORT)
+    else:
+        client_socket = existing_socket
+
+    clear_seed_queue()
     print_help()
-    
     waiting_for_game = True
     ready_sent = False
     printed_prompt = False
 
-    # Wait for the game seed before starting.
     while waiting_for_game:
         try:
             seed_or_message = seed_queue.get_nowait()
@@ -67,7 +74,6 @@ if __name__ == "__main__":
             else:
                 print("Unknown command. Type 'help' for available commands.")
 
-    # If still waiting, try to get the seed from the queue.
     if waiting_for_game:
         seed_or_message = seed_queue.get()
         if seed_or_message is None:
@@ -80,18 +86,24 @@ if __name__ == "__main__":
             seed = None
 
     print(f"Received game seed: {seed}")
-    
+    return client_socket, seed
+
+def run_game_session(existing_socket=None):
+    """
+    Runs one complete round of gameplay and returns the client_socket 
+    for reuse in subsequent rounds.
+    """
+    client_socket, seed = run_lobby(existing_socket)
     get_next_piece = create_piece_generator(seed)
     final_score = run_game(get_next_piece)
     print("Your game has ended!")
     print(f"Final Score: {final_score}")
 
-    # Notify the server that this client has finished.
     client_socket.sendall(f"LOSE:{final_score}\n".encode())
-    
-    # Wait indefinitely for the final GAME_RESULTS message.
+
     print("Waiting for final game results from the server...\n")
     game_results = None
+    # Block until a GAME_RESULTS message is received.
     while True:
         try:
             message = seed_queue.get()
@@ -109,4 +121,17 @@ if __name__ == "__main__":
     else:
         print("No final game results received.")
 
-    client_socket.close()
+    # Do not close the socket, return it for reusing in the next round.
+    return client_socket
+
+def main():
+    client_socket = None
+    while True:
+        client_socket = run_game_session(existing_socket=client_socket)
+        print("Returning to lobby for a new round...\n")
+        time.sleep(3)
+    if client_socket:
+        client_socket.close()
+
+if __name__ == "__main__":
+    main()
