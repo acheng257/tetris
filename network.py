@@ -8,10 +8,11 @@ from tetris_game import TETROMINOES
 lock = threading.Lock()
 room_clients = {}      # Maps client socket to ready state (True/False)
 MAX_PLAYERS = 4        # Default max number of players for the room
-game_started = False   # Flag set once the room is started
-game_seed = None       # Seed to be used for piece generation
+game_started = False   # Flag indicating whether the game has started
+game_seed = None       # Seed used for piece generation
 
-seed_queue = queue.Queue()  # Clients wait for the game seed or messages via this queue
+seed_queue = queue.Queue()     # For receiving the game seed and game results.
+garbage_queue = queue.Queue()  # For receiving garbage messages separately.
 
 DEFAULT_PORT = 9999
 DEFAULT_HOST = 'localhost'
@@ -47,7 +48,7 @@ def accept_clients(server_socket):
                         client.sendall("GAME_ALREADY_STARTED\n".encode())
                         client.close()
                         continue
-                    room_clients[client] = False  # Initially not ready
+                    room_clients[client] = False
                     print(f"Client connected from {addr} ({len(room_clients)}/{MAX_PLAYERS})")
                 threading.Thread(target=handle_client, args=(client,), daemon=True).start()
             except socket.timeout:
@@ -92,9 +93,21 @@ def handle_client(client):
                     with lock:
                         players_results[client_addr] = score
                         print(f"Recorded loss from {client_addr} with score {score}")
-                        # When every connected client has reported a loss, broadcast final results.
                         if len(players_results) == len(room_clients):
                             broadcast_results()
+                elif line.startswith("GARBAGE:"):
+                    try:
+                        n = int(line.split(":", 1)[1].strip())
+                    except ValueError:
+                        n = 0
+                    with lock:
+                        # Broadcast garbage message to all other clients.
+                        for cl in list(room_clients.keys()):
+                            if cl != client:
+                                try:
+                                    cl.sendall(f"GARBAGE:{n}\n".encode())
+                                except Exception as e:
+                                    print(f"Error sending garbage to {cl.getpeername()}: {e}")
                 else:
                     print(f"Unrecognized command from {client_addr}: '{line}'")
     except Exception as e:
@@ -140,21 +153,13 @@ def broadcast_message(message):
                 del room_clients[client]
 
 def broadcast_results():
-    """
-    Compile the final results from all players and broadcast to everyone,
-    then reset the game state so that new rounds can start.
-    """
     global players_results, game_started, game_seed
-    # Sort results by highest to lowest score
     sorted_results = sorted(players_results.items(), key=lambda item: item[1], reverse=True)
     results_list = " | ".join(f"{addr}: {score}" for addr, score in sorted_results)
     results = "GAME_RESULTS:" + results_list
     print("Broadcasting final results: " + results)
     broadcast_message(results)
-    
-    # Reset game state in preparation for new round
     reset_game_state()
-
 
 # ----------------------- Client Functions ----------------------- #
 def connect_to_server(host, port=DEFAULT_PORT):
@@ -165,7 +170,7 @@ def connect_to_server(host, port=DEFAULT_PORT):
     return client_socket
 
 def client_listener(client_socket):
-    global seed_queue
+    global seed_queue, garbage_queue
     buffer = ""
     while True:
         try:
@@ -179,6 +184,7 @@ def client_listener(client_socket):
                 line = line.strip()
                 print(f"Client received: '{line}'")
                 if line.startswith("START:"):
+                    # Put seed data into seed_queue.
                     _, seed_str = line.split(":", 1)
                     seed = int(seed_str.strip())
                     seed_queue.put(seed)
@@ -188,8 +194,11 @@ def client_listener(client_socket):
                     seed_queue.put(None)
                 elif line.startswith("GAME_RESULTS:"):
                     seed_queue.put(line)
+                elif line.startswith("GARBAGE:"):
+                    # Put garbage messages into the separate garbage_queue.
+                    garbage_queue.put(line)
         except OSError as e:
-            if e.errno == 9:  # Ignore bad file descriptor error
+            if e.errno == 9:
                 break
             else:
                 print("Client listener error:", e)

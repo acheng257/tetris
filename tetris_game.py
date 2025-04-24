@@ -3,6 +3,7 @@ import time
 import random
 import copy
 import locale
+import queue
 
 locale.setlocale(locale.LC_ALL, '')
 
@@ -11,7 +12,6 @@ BOARD_WIDTH = 10
 BOARD_HEIGHT = 20
 EMPTY_CELL = 0
 
-# Each tetromino has a shape and a color (color indices 1-7)
 TETROMINOES = {
     "I": {"shape": [[1, 1, 1, 1]], "color": 1},
     "O": {"shape": [[2, 2], [2, 2]], "color": 2},
@@ -23,18 +23,17 @@ TETROMINOES = {
 }
 
 COLORS = {
-    0: curses.COLOR_BLACK,  # Background
-    1: curses.COLOR_CYAN,   # I
-    2: curses.COLOR_YELLOW, # O
-    3: curses.COLOR_MAGENTA,# T
-    4: curses.COLOR_GREEN,  # S
-    5: curses.COLOR_RED,    # Z
-    6: curses.COLOR_BLUE,   # J
-    7: curses.COLOR_WHITE,  # L
-    8: curses.COLOR_WHITE,  # Border
+    0: curses.COLOR_BLACK,
+    1: curses.COLOR_CYAN,
+    2: curses.COLOR_YELLOW,
+    3: curses.COLOR_MAGENTA,
+    4: curses.COLOR_GREEN,
+    5: curses.COLOR_RED,
+    6: curses.COLOR_BLUE,
+    7: curses.COLOR_WHITE,
+    8: curses.COLOR_WHITE,
 }
 
-# Movement directions
 LEFT = {"x": -1, "y": 0}
 RIGHT = {"x": 1, "y": 0}
 DOWN = {"x": 0, "y": 1}
@@ -45,15 +44,12 @@ class Piece:
         self.type = tetromino_type
         self.shape = copy.deepcopy(TETROMINOES[tetromino_type]["shape"])
         self.color = TETROMINOES[tetromino_type]["color"]
-
-        # Position the piece at the top center of the board
         self.x = BOARD_WIDTH // 2 - len(self.shape[0]) // 2
         self.y = 0
         if tetromino_type == "I":
             self.y = -1
 
     def rotate(self):
-        """Rotate the piece clockwise 90 degrees."""
         rows, cols = len(self.shape), len(self.shape[0])
         rotated = [[0 for _ in range(rows)] for _ in range(cols)]
         for r in range(rows):
@@ -62,7 +58,6 @@ class Piece:
         return rotated
 
     def get_positions(self):
-        """Return board positions occupied by this piece."""
         positions = []
         for y, row in enumerate(self.shape):
             for x, cell in enumerate(row):
@@ -101,14 +96,12 @@ def draw_board(stdscr, board, score, level, combo_display):
     border_color = curses.color_pair(8 + 1)
 
     try:
-        # Draw border
         stdscr.addstr(start_y, start_x, "+" + "--" * BOARD_WIDTH + "+", border_color)
         for y in range(BOARD_HEIGHT):
             stdscr.addstr(start_y + 1 + y, start_x, "|", border_color)
             stdscr.addstr(start_y + 1 + y, start_x + BOARD_WIDTH * 2 + 1, "|", border_color)
         stdscr.addstr(start_y + BOARD_HEIGHT + 1, start_x, "+" + "--" * BOARD_WIDTH + "+", border_color)
 
-        # Draw board cells
         for y, row in enumerate(board):
             for x, cell in enumerate(row):
                 if cell != EMPTY_CELL:
@@ -117,7 +110,6 @@ def draw_board(stdscr, board, score, level, combo_display):
                 else:
                     stdscr.addstr(start_y + 1 + y, start_x + 1 + x * 2, "  ")
 
-        # Dashboard: Score, Level, and Combo
         stdscr.addstr(start_y + 2, start_x + board_width + 2, f"Score: {score}")
         stdscr.addstr(start_y + 4, start_x + board_width + 2, f"Level: {level}")
         stdscr.addstr(start_y + 6, start_x + board_width + 2, f"Combo: {combo_display}")
@@ -133,7 +125,6 @@ def draw_board(stdscr, board, score, level, combo_display):
 
         stdscr.refresh()
         return True
-
     except curses.error:
         try:
             stdscr.clear()
@@ -208,18 +199,14 @@ def draw_piece(stdscr, piece, board, ghost=False):
                 if piece.y + y >= 0:
                     color_pair = curses.color_pair(piece.color + 1)
                     try:
-                        stdscr.addstr(start_y + 1 + piece.y + y,
-                                      start_x + 1 + (piece.x + x) * 2,
-                                      "[]", color_pair)
+                        stdscr.addstr(start_y + 1 + piece.y + y, start_x + 1 + (piece.x + x) * 2, "[]", color_pair)
                     except curses.error:
                         pass
                 if ghost and piece.y != ghost_y:
                     ghost_display_y = ghost_y + y
                     if 0 <= ghost_display_y < BOARD_HEIGHT:
                         try:
-                            stdscr.addstr(start_y + 1 + ghost_display_y,
-                                          start_x + 1 + (piece.x + x) * 2,
-                                          "[]", curses.A_DIM)
+                            stdscr.addstr(start_y + 1 + ghost_display_y, start_x + 1 + (piece.x + x) * 2, "[]", curses.A_DIM)
                         except curses.error:
                             pass
 
@@ -231,7 +218,6 @@ def draw_next_and_held(stdscr, next_piece, held_piece, board):
     start_x = max(0, (w - board_width) // 2)
     preview_y = start_y + 15
     preview_x = start_x + board_width + 2
-
     try:
         stdscr.addstr(preview_y, preview_x, "Next:")
         next_preview_y = preview_y + 1
@@ -240,9 +226,7 @@ def draw_next_and_held(stdscr, next_piece, held_piece, board):
             for x, cell in enumerate(row):
                 if cell:
                     color_pair = curses.color_pair(next_piece.color + 1)
-                    stdscr.addstr(next_preview_y + y,
-                                  next_preview_x + x * 2,
-                                  "[]", color_pair)
+                    stdscr.addstr(next_preview_y + y, next_preview_x + x * 2, "[]", color_pair)
         stdscr.addstr(preview_y + 5, preview_x, "Hold:")
         if held_piece:
             held_preview_y = preview_y + 6
@@ -251,28 +235,36 @@ def draw_next_and_held(stdscr, next_piece, held_piece, board):
                 for x, cell in enumerate(row):
                     if cell:
                         color_pair = curses.color_pair(held_piece.color + 1)
-                        stdscr.addstr(held_preview_y + y,
-                                      held_preview_x + x * 2,
-                                      "[]", color_pair)
+                        stdscr.addstr(held_preview_y + y, held_preview_x + x * 2, "[]", color_pair)
     except curses.error:
         pass
 
 def create_piece_generator(seed):
-    """
-    Returns a function that generates pieces using an RNG initialized with the provided seed.
-    """
     rng = random.Random(seed)
     def get_next_piece():
         tetromino_type = rng.choice(list(TETROMINOES.keys()))
         return Piece(tetromino_type)
     return get_next_piece
 
-def run_game(get_next_piece):
+def add_garbage_lines(board, count):
+    """
+    Remove count rows from the top and append count garbage rows with one random gap.
+    """
+    for _ in range(count):
+        gap = random.randint(0, BOARD_WIDTH - 1)
+        garbage_line = [random.randint(1, 7) for _ in range(BOARD_WIDTH)]
+        garbage_line[gap] = EMPTY_CELL
+        board.pop(0)
+        board.append(garbage_line)
+
+# ---------------------- Main Game Loop ---------------------- #
+# net_queue is passed from the client as the garbage-only queue.
+def run_game(get_next_piece, client_socket=None, net_queue=None):
     stdscr = curses.initscr()
     stdscr.keypad(True)
     curses.curs_set(0)
     stdscr.nodelay(True)
-    stdscr.timeout(50)
+    stdscr.timeout(10)
     init_colors()
 
     board = create_board()
@@ -280,7 +272,6 @@ def run_game(get_next_piece):
     level = 1
     lines_cleared_total = 0
 
-    # For combo tracking
     prev_cleared = False
     combo_count = 0
 
@@ -288,6 +279,8 @@ def run_game(get_next_piece):
     next_piece = get_next_piece()
     held_piece = None
     can_hold = True
+
+    garbage_sent = False
 
     last_fall_time = time.time()
     fall_speed = 1.0
@@ -302,7 +295,7 @@ def run_game(get_next_piece):
     key_down_pressed = False
     last_key_time = time.time()
     last_move_time = time.time()
-    move_delay = 0.08
+    move_delay = 0.1
 
     key_left_first_press = False
     key_right_first_press = False
@@ -313,6 +306,24 @@ def run_game(get_next_piece):
 
     try:
         while not game_over:
+            # Process incoming garbage messages from the dedicated net_queue.
+            if net_queue is not None:
+                try:
+                    while True:
+                        net_msg = net_queue.get_nowait()
+                        if isinstance(net_msg, str) and net_msg.startswith("GARBAGE:"):
+                            try:
+                                garbage_amount = int(net_msg.split(":", 1)[1].strip())
+                                add_garbage_lines(board, garbage_amount)
+                                # Immediately redraw the board to show the garbage.
+                                draw_board(stdscr, board, score, level, f"{combo_count}" if prev_cleared else "-")
+                                draw_piece(stdscr, current_piece, board, ghost=True)
+                                draw_next_and_held(stdscr, next_piece, held_piece, board)
+                            except ValueError:
+                                pass
+                except queue.Empty:
+                    pass
+
             current_time = time.time()
             key = stdscr.getch()
             touching_ground = check_collision(board, current_piece, 0, 1)
@@ -420,25 +431,38 @@ def run_game(get_next_piece):
                         last_move_time = current_time
 
             if touching_ground:
+                if not garbage_sent:
+                    temp_board = [row.copy() for row in board]
+                    merge_piece(temp_board, current_piece)
+                    simulated_lines = clear_lines(temp_board)
+                    if simulated_lines > 0:
+                        if prev_cleared:
+                            combo_count += 1
+                        else:
+                            combo_count = 0
+                        prev_cleared = True
+                        if client_socket and combo_count > 0:
+                            try:
+                                client_socket.sendall(f"GARBAGE:{combo_count}\n".encode())
+                            except Exception:
+                                pass
+                    else:
+                        prev_cleared = False
+                    garbage_sent = True
+
                 if lock_timer is None:
                     lock_timer = current_time
                     landing_y = current_piece.y
                 elif current_piece.y != landing_y:
                     lock_timer = current_time
                     landing_y = current_piece.y
+
                 if current_time - lock_timer >= lock_delay:
                     merge_piece(board, current_piece)
                     lines = clear_lines(board)
-                    if lines > 0:
-                        if prev_cleared:
-                            combo_count += 1
-                        else:
-                            combo_count = 0
-                        prev_cleared = True
-                    else:
-                        prev_cleared = False
                     score += calculate_score(lines, level)
                     lines_cleared_total += lines
+                    garbage_sent = False
                     current_piece = next_piece
                     next_piece = get_next_piece()
                     can_hold = True
@@ -449,9 +473,7 @@ def run_game(get_next_piece):
                     key_right_pressed = False
                     key_down_pressed = False
                     last_fall_time = current_time
-
                     if is_game_over(board):
-                        # Finalize the board, then display a game-over screen for this client
                         merge_piece(board, current_piece)
                         draw_board(stdscr, board, score, level, f"{combo_count}" if prev_cleared else "-")
                         h, w = stdscr.getmaxyx()
@@ -465,6 +487,7 @@ def run_game(get_next_piece):
             else:
                 lock_timer = None
                 landing_y = None
+                garbage_sent = False
 
             if key != -1:
                 if key == ord("q"):
@@ -481,10 +504,16 @@ def run_game(get_next_piece):
                         else:
                             combo_count = 0
                         prev_cleared = True
+                        if client_socket and combo_count > 0:
+                            try:
+                                client_socket.sendall(f"GARBAGE:{combo_count}\n".encode())
+                            except Exception:
+                                pass
                     else:
                         prev_cleared = False
                     score += calculate_score(lines, level)
                     lines_cleared_total += lines
+                    garbage_sent = False
                     current_piece = next_piece
                     next_piece = get_next_piece()
                     can_hold = True
@@ -495,7 +524,6 @@ def run_game(get_next_piece):
                     key_right_pressed = False
                     key_down_pressed = False
                     last_fall_time = current_time
-
                     if check_collision(board, current_piece):
                         merge_piece(board, current_piece)
                         draw_board(stdscr, board, score, level, f"{combo_count}" if prev_cleared else "-")
@@ -541,7 +569,6 @@ def run_game(get_next_piece):
     finally:
         curses.endwin()
 
-# If run standalone (without network), use local random seed.
 if __name__ == "__main__":
     seed = random.randint(0, 1000000)
     get_next_piece = create_piece_generator(seed)

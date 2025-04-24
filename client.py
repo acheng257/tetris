@@ -2,7 +2,7 @@ import sys
 import time
 import select
 import queue
-from network import connect_to_server, seed_queue, DEFAULT_PORT, DEFAULT_HOST
+from network import connect_to_server, seed_queue, garbage_queue, DEFAULT_PORT, DEFAULT_HOST
 from tetris_game import create_piece_generator, run_game
 
 def print_help():
@@ -12,25 +12,20 @@ def print_help():
     print("  quit     - Exit the program")
     print()
 
-def clear_seed_queue():
-    """Empty the seed_queue so that old messages don’t interfere."""
-    while not seed_queue.empty():
+def clear_queue(q):
+    while not q.empty():
         try:
-            seed_queue.get_nowait()
+            q.get_nowait()
         except queue.Empty:
             break
 
 def run_lobby(existing_socket=None):
-    """
-    Show the lobby interface and wait for a game seed.
-    If an existing socket is provided, it is reused.
-    """
     if existing_socket is None:
         client_socket = connect_to_server(DEFAULT_HOST, DEFAULT_PORT)
     else:
         client_socket = existing_socket
 
-    clear_seed_queue()
+    clear_queue(seed_queue)
     print_help()
     waiting_for_game = True
     ready_sent = False
@@ -89,21 +84,15 @@ def run_lobby(existing_socket=None):
     return client_socket, seed
 
 def run_game_session(existing_socket=None):
-    """
-    Runs one complete round of gameplay and returns the client_socket 
-    for reuse in subsequent rounds.
-    """
     client_socket, seed = run_lobby(existing_socket)
     get_next_piece = create_piece_generator(seed)
-    final_score = run_game(get_next_piece)
+    # Pass garbage_queue as the net_queue for processing garbage messages.
+    final_score = run_game(get_next_piece, client_socket, garbage_queue)
     print("Your game has ended!")
     print(f"Final Score: {final_score}")
-
     client_socket.sendall(f"LOSE:{final_score}\n".encode())
-
     print("Waiting for final game results from the server...\n")
     game_results = None
-    # Block until a GAME_RESULTS message is received.
     while True:
         try:
             message = seed_queue.get()
@@ -120,8 +109,6 @@ def run_game_session(existing_socket=None):
         print("====================\n")
     else:
         print("No final game results received.")
-
-    # Do not close the socket, return it for reusing in the next round.
     return client_socket
 
 def main():
@@ -129,6 +116,8 @@ def main():
     while True:
         client_socket = run_game_session(existing_socket=client_socket)
         print("Returning to lobby for a new round...\n")
+        clear_queue(seed_queue)
+        clear_queue(garbage_queue)
         time.sleep(3)
     if client_socket:
         client_socket.close()
