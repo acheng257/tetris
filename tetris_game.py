@@ -5,6 +5,7 @@ import copy
 import locale
 import queue
 
+from proto import tetris_pb2
 locale.setlocale(locale.LC_ALL, '')
 
 # ------------------ Constants and Tetrimino Definitions ------------------ #
@@ -258,7 +259,6 @@ def add_garbage_lines(board, count):
         board.append(garbage_line)
 
 # ---------------------- Main Game Loop ---------------------- #
-# net_queue is passed from the client as the garbage-only queue.
 def run_game(get_next_piece, client_socket=None, net_queue=None):
     stdscr = curses.initscr()
     stdscr.keypad(True)
@@ -306,7 +306,6 @@ def run_game(get_next_piece, client_socket=None, net_queue=None):
 
     try:
         while not game_over:
-            # Process incoming garbage messages from the dedicated net_queue.
             if net_queue is not None:
                 try:
                     while True:
@@ -321,6 +320,13 @@ def run_game(get_next_piece, client_socket=None, net_queue=None):
                                 draw_next_and_held(stdscr, next_piece, held_piece, board)
                             except ValueError:
                                 pass
+                        # Handle gRPC messages (TetrisMessage objects).
+                        elif hasattr(net_msg, "type") and net_msg.type == tetris_pb2.GARBAGE:
+                            garbage_amount = net_msg.garbage
+                            add_garbage_lines(board, garbage_amount)
+                            draw_board(stdscr, board, score, level, f"{combo_count}" if prev_cleared else "-")
+                            draw_piece(stdscr, current_piece, board, ghost=True)
+                            draw_next_and_held(stdscr, next_piece, held_piece, board)
                 except queue.Empty:
                     pass
 

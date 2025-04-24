@@ -1,0 +1,6 @@
+# gRPC packages for Python
+grpcio>=1.55.0
+grpcio-tools>=1.55.0
+
+# Uncomment the following line on Windows machines for curses.
+# windows-curses

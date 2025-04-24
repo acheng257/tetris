@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package tetris;
+
+enum MessageType {
+    UNKNOWN = 0;
+    // Client → Server
+    READY = 1;
+    START = 2;
+    LOSE = 3;
+    GARBAGE = 4;
+    // Server → Client
+    GAME_STARTED = 5;
+    GAME_ALREADY_STARTED = 6;
+    GAME_RESULTS = 7;
+}
+
+message TetrisMessage {
+    MessageType type = 1;
+    // For LOSE messages (client reporting a loss)
+    int32 score = 2;
+    // For GAME_STARTED messages (server sending seed)
+    int32 seed = 3;
+    // For GARBAGE messages
+    int32 garbage = 4;
+    // For GAME_RESULTS messages (server sending final standings)
+    string results = 5;
+}
+
+service TetrisService {
+    rpc Play(stream TetrisMessage) returns (stream TetrisMessage);
+}
