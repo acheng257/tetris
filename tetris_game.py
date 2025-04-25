@@ -489,6 +489,11 @@ def run_game(get_next_piece, client_socket=None, net_queue=None):
                         stdscr.nodelay(False)
                         stdscr.getch()
                         game_over = True
+                        if client_socket:
+                            try:
+                                client_socket.sendall(f"LOSE:{score}\n".encode())
+                            except Exception as e:
+                                print(f"Error sending LOSE message: {e}")
                         break
             else:
                 lock_timer = None
