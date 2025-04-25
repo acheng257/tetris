@@ -46,10 +46,13 @@ def main(listen_port, peer_addrs):
                 elif cmd == 'start':
                     leader = min(all_addrs)
                     if listen_addr == leader or f"localhost:{listen_port}" == leader:
-                        seed = random.randint(0, 1_000_000)
-                        net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.START, seed=seed))
-                        game_started = True
-                        print(f"[LOBBY] You (leader) START, seed = {seed}")
+                        if len(ready) == len(all_addrs):
+                            seed = random.randint(0, 1_000_000)
+                            net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.START, seed=seed))
+                            game_started = True
+                            print(f"[LOBBY] You (leader) START, seed = {seed}")
+                        else:
+                            print(f"[LOBBY] Cannot start: waiting for {len(all_addrs) - len(ready)} more players to be ready")
                     else:
                         print(f"[LOBBY] Only leader ({leader}) can START")
                 elif cmd == 'quit':
@@ -58,7 +61,6 @@ def main(listen_port, peer_addrs):
                 else:
                     print("[LOBBY] Unknown command. Use 'ready', 'start', or 'quit'.")
 
-            # Auto-start when all provided peers are ready
             if not game_started and len(ready) == len(all_addrs):
                 leader = min(all_addrs)
                 if listen_addr == leader or f"localhost:{listen_port}" == leader:
@@ -80,20 +82,23 @@ def main(listen_port, peer_addrs):
                 s = data.decode().strip()
                 if s.startswith("GARBAGE:"):
                     n = int(s.split(":",1)[1])
-                    net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.GARBAGE, garbage=n))
+                    if n > 0:
+                        net.broadcast(tetris_pb2.TetrisMessage(
+                            type=tetris_pb2.GARBAGE, 
+                            garbage=n,
+                            sender=listen_addr  # Include sender for self-identification
+                        ))
                 elif s.startswith("LOSE:"):
                     sc = int(s.split(":",1)[1])
                     net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.LOSE, score=sc))
 
-        final_score = run_game(get_next_piece, PeerSocket(), NetQueueAdapter())
+        final_score = run_game(get_next_piece, PeerSocket(), NetQueueAdapter(), listen_port)
         print(f"[RESULTS] Your score = {final_score}")
         
-        # Broadcast LOSE message with this peer's score
         net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.LOSE, score=final_score))
 
-        # collect LOSE messages then broadcast final standings
         scores = {listen_addr: final_score}
-        results_timeout = time.time() + 10  # 10 second timeout TODO: check if we still need this
+        results_timeout = time.time() + 10  # 10 second timeout
         
         leader = min(all_addrs)
         is_leader = (listen_addr == leader or f"localhost:{listen_port}" == leader)
@@ -113,6 +118,7 @@ def main(listen_port, peer_addrs):
             except queue.Empty:
                 continue
 
+        # Leader broadcasts results
         if is_leader and not results_received:
             results_str = " | ".join(f"{pid}: {sc}" for pid, sc in sorted(scores.items(), key=lambda x: -x[1]))
             net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.GAME_RESULTS, results=results_str))
@@ -144,5 +150,4 @@ def main(listen_port, peer_addrs):
             except queue.Empty:
                 break
 
-        # return to lobby for next round
         print("Returning to lobby for a new game...")

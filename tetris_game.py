@@ -259,7 +259,7 @@ def add_garbage_lines(board, count):
         board.append(garbage_line)
 
 # ---------------------- Main Game Loop ---------------------- #
-def run_game(get_next_piece, client_socket=None, net_queue=None):
+def run_game(get_next_piece, client_socket=None, net_queue=None, listen_port=None):
     stdscr = curses.initscr()
     stdscr.keypad(True)
     curses.curs_set(0)
@@ -281,6 +281,9 @@ def run_game(get_next_piece, client_socket=None, net_queue=None):
     can_hold = True
 
     garbage_sent = False
+    my_addr = None
+    if listen_port:
+        my_addr = f"[::]:{listen_port}"
 
     last_fall_time = time.time()
     fall_speed = 1.0
@@ -322,11 +325,14 @@ def run_game(get_next_piece, client_socket=None, net_queue=None):
                                 pass
                         # Handle gRPC messages (TetrisMessage objects).
                         elif hasattr(net_msg, "type") and net_msg.type == tetris_pb2.GARBAGE:
-                            garbage_amount = net_msg.garbage
-                            add_garbage_lines(board, garbage_amount)
-                            draw_board(stdscr, board, score, level, f"{combo_count}" if prev_cleared else "-")
-                            draw_piece(stdscr, current_piece, board, ghost=True)
-                            draw_next_and_held(stdscr, next_piece, held_piece, board)
+                            sender = getattr(net_msg, "sender", None)
+                            
+                            if sender != my_addr and not (sender and "localhost" in sender and f":{listen_port}" in sender):
+                                garbage_amount = net_msg.garbage
+                                add_garbage_lines(board, garbage_amount)
+                                draw_board(stdscr, board, score, level, f"{combo_count}" if prev_cleared else "-")
+                                draw_piece(stdscr, current_piece, board, ghost=True)
+                                draw_next_and_held(stdscr, next_piece, held_piece, board)
                 except queue.Empty:
                     pass
 

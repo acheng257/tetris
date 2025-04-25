@@ -26,9 +26,7 @@ if _version_not_supported:
 
 
 class TetrisServiceStub(object):
-    """The TetrisService defines a bidirectional streaming RPC so that clients
-    can both send and receive messages continuously.
-    """
+    """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
         """Constructor.
@@ -44,9 +42,7 @@ class TetrisServiceStub(object):
 
 
 class TetrisServiceServicer(object):
-    """The TetrisService defines a bidirectional streaming RPC so that clients
-    can both send and receive messages continuously.
-    """
+    """Missing associated documentation comment in .proto file."""
 
     def Play(self, request_iterator, context):
         """Missing associated documentation comment in .proto file."""
@@ -71,9 +67,7 @@ def add_TetrisServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class TetrisService(object):
-    """The TetrisService defines a bidirectional streaming RPC so that clients
-    can both send and receive messages continuously.
-    """
+    """Missing associated documentation comment in .proto file."""
 
     @staticmethod
     def Play(request_iterator,
