@@ -5,11 +5,13 @@ from concurrent import futures
 
 from proto import tetris_pb2, tetris_pb2_grpc
 
+
 class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
     """
     P2P networking layer: each peer runs a gRPC server and also
     dials out to every other peer to form a full mesh.
     """
+
     def __init__(self, listen_addr, peer_addrs):
         # Shared incoming queue for all peers: (peer_id, TetrisMessage)
         self.incoming = queue.Queue()
@@ -36,8 +38,11 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
             except Exception:
                 host, port = addr, None
 
-            if (self.listen_port is not None and port == self.listen_port
-                    and host in ("localhost", "127.0.0.1", "::1", "[::1]")):
+            if (
+                self.listen_port is not None
+                and port == self.listen_port
+                and host in ("localhost", "127.0.0.1", "::1", "[::1]")
+            ):
                 print(f"[DEBUG] Skipping dial to self at {addr}")
                 continue
 
@@ -49,14 +54,14 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
             def outbound_gen(q=q):
                 while True:
                     msg = q.get()
-                    print(f"[DEBUG] OUT → {addr}: {msg}")
+                    # Skip debug output for GAME_STATE messages
+                    if not hasattr(msg, "type") or msg.type != tetris_pb2.GAME_STATE:
+                        print(f"[DEBUG] OUT → {addr}: {msg.type}")
                     yield msg
 
             response_iter = stub.Play(outbound_gen())
             threading.Thread(
-                target=self._recv_thread,
-                args=(addr, response_iter),
-                daemon=True
+                target=self._recv_thread, args=(addr, response_iter), daemon=True
             ).start()
             print(f"[DEBUG] Connected to peer stub at {addr}")
 
@@ -64,7 +69,9 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         """Receive messages from stub.Play() and enqueue them."""
         try:
             for msg in response_iter:
-                print(f"[DEBUG] IN  ← {addr}: {msg}")
+                # Skip debug output for GAME_STATE messages
+                if not hasattr(msg, "type") or msg.type != tetris_pb2.GAME_STATE:
+                    print(f"[DEBUG] IN  ← {addr}: {msg.type}")
                 self.incoming.put((addr, msg))
         except Exception as e:
             print(f"[ERROR] _recv_thread for {addr} crashed: {e}")
@@ -80,7 +87,9 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         def reader():
             try:
                 for msg in request_iterator:
-                    print(f"[DEBUG] IN  ← {peer_id}: {msg}")
+                    # Skip debug output for GAME_STATE messages
+                    if not hasattr(msg, "type") or msg.type != tetris_pb2.GAME_STATE:
+                        print(f"[DEBUG] IN  ← {peer_id}: {msg.type}")
                     self.incoming.put((peer_id, msg))
             except Exception as e:
                 print(f"[ERROR] inbound reader for {peer_id} crashed: {e}")

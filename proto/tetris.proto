@@ -8,6 +8,24 @@ enum MessageType {
   GARBAGE = 2;
   LOSE = 3;
   GAME_RESULTS = 4;
+  GAME_STATE = 5;  // New message type for game state updates
+}
+
+message ActivePiece {
+  string piece_type = 1;  // I, O, T, S, Z, J, L
+  int32 x = 2;            // X position
+  int32 y = 3;            // Y position
+  int32 rotation = 4;     // 0, 1, 2, 3 (0, 90, 180, 270 degrees)
+  int32 color = 5;        // Color value
+}
+
+message BoardState {
+  repeated int32 cells = 1;  // Flattened 2D array of board cells
+  int32 width = 2;           // Board width
+  int32 height = 3;          // Board height
+  int32 score = 4;           // Current score
+  string player_name = 5;    // Player identifier (can be derived from address)
+  ActivePiece active_piece = 6; // Currently falling piece
 }
 
 message TetrisMessage {
@@ -28,6 +46,9 @@ message TetrisMessage {
   
   // Any additional data
   bytes extra = 6;
+  
+  // GAME_STATE params
+  BoardState board_state = 8;  // Game board state for display
 }
 
 service TetrisService {
