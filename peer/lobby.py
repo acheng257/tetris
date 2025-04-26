@@ -103,6 +103,7 @@ def main(listen_port, peer_addrs):
 
     # Thread to process incoming game state messages
     def process_game_states():
+        nonlocal seed
         while True:
             try:
                 peer_id, msg = net.incoming.get(timeout=0.1)
@@ -135,7 +136,6 @@ def main(listen_port, peer_addrs):
                     print(f"[LOBBY] {peer_id} READY ({len(ready)}/{len(all_addrs)})")
                 elif msg.type == tetris_pb2.START:
                     seed = msg.seed
-                    game_started = True
                     print(f"[LOBBY] Received START, seed = {seed}")
                     game_started_event.set()
                 elif msg.type == tetris_pb2.LOSE:
@@ -210,7 +210,7 @@ def main(listen_port, peer_addrs):
             if not game_started and len(ready) == len(all_addrs):
                 leader = min(all_addrs)
                 if listen_addr == leader or f"localhost:{listen_port}" == leader:
-                    seed = random.randint(0, 1_000_000)
+                    seed = random.randint(0, 1000000)
                     net.broadcast(
                         tetris_pb2.TetrisMessage(type=tetris_pb2.START, seed=seed)
                     )
