@@ -140,11 +140,38 @@ def main(listen_port, peer_addrs):
                     game_started_event.set()
                 elif msg.type == tetris_pb2.LOSE:
                     if peer_id not in scores:
-                        scores[peer_id] = msg.score
+                        # Handle LOSE message with survival time and attacks data
+                        survival_time = msg.score
+                        attacks_data = ""
+
+                        # Check for additional attack data in the extra field
+                        if hasattr(msg, "extra") and msg.extra:
+                            try:
+                                attacks_data = msg.extra.decode()
+                            except Exception:
+                                pass
+
+                        # Store the result data: survival_time:attacks_sent:attacks_received
+                        result_data = f"{survival_time:.2f}"
+                        if attacks_data:
+                            result_data += f":{attacks_data}"
+
+                        scores[peer_id] = result_data
+
+                        # Get player name if available
                         player = peer_boards.get(peer_id, {}).get(
                             "player_name", peer_id
                         )
-                        print(f"[RESULTS] {player} scored = {msg.score}")
+
+                        # Parse and display the data
+                        parts = result_data.split(":")
+                        survival_time = float(parts[0])
+                        attacks_sent = int(parts[1]) if len(parts) > 1 else 0
+                        attacks_received = int(parts[2]) if len(parts) > 2 else 0
+
+                        print(
+                            f"[RESULTS] {player} survived for {survival_time:.1f}s (Attacks: {attacks_sent}→, {attacks_received}←)"
+                        )
                 elif msg.type == tetris_pb2.GAME_RESULTS:
                     print("=== FINAL RESULTS ===")
                     print(msg.results)
@@ -240,6 +267,9 @@ def main(listen_port, peer_addrs):
                                 type=tetris_pb2.GARBAGE,
                                 garbage=n,
                                 sender=listen_addr,  # Include sender for self-identification
+                                extra=(
+                                    player_name.encode() if player_name else b""
+                                ),  # Include player name for better debug messages
                             )
                         )
                 elif s.startswith("LOSE:"):
@@ -296,11 +326,21 @@ def main(listen_port, peer_addrs):
             peer_boards_lock,
             player_name,
         )
-        print(f"[RESULTS] Your score = {final_score}")
+        print(
+            f"[RESULTS] Your stats: Survival Time = {final_score['survival_time']:.1f}s, Attacks: {final_score['attacks_sent']}→, {final_score['attacks_received']}←"
+        )
 
-        net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.LOSE, score=final_score))
+        net.broadcast(
+            tetris_pb2.TetrisMessage(
+                type=tetris_pb2.LOSE,
+                score=final_score["survival_time"],
+                extra=f"{final_score['attacks_sent']}:{final_score['attacks_received']}".encode(),
+            )
+        )
 
-        scores = {listen_addr: final_score}
+        scores = {
+            listen_addr: f"{final_score['survival_time']:.2f}:{final_score['attacks_sent']}:{final_score['attacks_received']}"
+        }
         results_timeout = time.time() + 10  # 10 second timeout
 
         leader = min(all_addrs)
@@ -335,11 +375,25 @@ def main(listen_port, peer_addrs):
             # Include current player
             player_names[listen_addr] = player_name
 
-            # Format results with player names when available
+            # Format results with player names and survival time when available
             results_list = []
-            for pid, sc in sorted(scores.items(), key=lambda x: -x[1]):
+            for pid, result_data in sorted(
+                scores.items(), key=lambda x: -float(x[1].split(":")[0])
+            ):
                 player = player_names.get(pid, pid)
-                results_list.append(f"{player}: {sc}")
+
+                # Parse the result data (survival time and attacks)
+                result_parts = result_data.split(":")
+                survival_time = float(result_parts[0])
+
+                # Get attacks data if available
+                attacks_sent = int(result_parts[1]) if len(result_parts) > 1 else 0
+                attacks_received = int(result_parts[2]) if len(result_parts) > 2 else 0
+
+                # Format as: "PlayerName: 120.5s (Attacks: 15→, 8←)"
+                results_list.append(
+                    f"{player}: {survival_time:.1f}s (Attacks: {attacks_sent}→, {attacks_received}←)"
+                )
 
             results_str = " | ".join(results_list)
 
@@ -354,7 +408,8 @@ def main(listen_port, peer_addrs):
         results_received = results_received_event.wait(5)
 
         if not results_received:
-            print("=== PARTIAL RESULTS (timeout) ===")
+            print("=== FINAL RESULTS ===")
+            print("Players ranked by survival time:")
             # Create a mapping from peer_id to player name
             player_names = {}
             with peer_boards_lock:
@@ -365,11 +420,25 @@ def main(listen_port, peer_addrs):
             # Include current player
             player_names[listen_addr] = player_name
 
-            sorted_scores = sorted(scores.items(), key=lambda x: -x[1])
-            for peer_id, score in sorted_scores:
+            # Display sorted results with player names and survival time
+            sorted_scores = sorted(
+                scores.items(), key=lambda x: -float(x[1].split(":")[0])
+            )
+            for i, (peer_id, result_data) in enumerate(sorted_scores):
                 player = player_names.get(peer_id, peer_id)
-                print(f"{player}: {score}")
-            print("================================")
+
+                # Parse the result data (survival time and attacks)
+                result_parts = result_data.split(":")
+                survival_time = float(result_parts[0])
+
+                # Get attacks data if available
+                attacks_sent = int(result_parts[1]) if len(result_parts) > 1 else 0
+                attacks_received = int(result_parts[2]) if len(result_parts) > 2 else 0
+
+                # Format as: "1. PlayerName: 120.5s (Attacks: 15→, 8←)"
+                print(
+                    f"{i+1}. {player}: {survival_time:.1f}s (Attacks: {attacks_sent}→, {attacks_received}←)"
+                )
 
         while not net.incoming.empty():
             try:

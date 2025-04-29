@@ -501,6 +501,136 @@ def get_piece_shape(piece_type, rotation):
     return shapes[rot_index]
 
 
+# ComboSystem class to handle combo logic
+class ComboSystem:
+    def __init__(self):
+        self.combo_count = 0
+        self.last_line_clear_time = 0
+        self.combo_time_window = 5.0  # Time window for combos in seconds
+        self.prev_cleared = False
+        self.combo_active = False  # Track if a combo is currently active
+        self.first_combo_time = 0  # When the first combo was detected
+        self.debug_message = ""
+        self.debug_time = 0
+        self.debug_display_time = 5.0  # Display debug message for 5 seconds
+
+    def update(self, lines_cleared, current_time):
+        """Update combo state based on lines cleared at current time"""
+        debug_message = None
+
+        if lines_cleared > 0:
+            # Case 1: Multiple lines cleared at once - always starts or continues a combo
+            if lines_cleared >= 2:
+                # Multiple lines cleared at once is always a combo
+                if not self.combo_active:
+                    # Starting a new combo with multiple lines
+                    self.combo_active = True
+                    self.first_combo_time = current_time
+                    self.combo_count = lines_cleared
+                else:
+                    # Continue existing combo with multiple lines
+                    if current_time - self.first_combo_time < self.combo_time_window:
+                        self.combo_count = max(
+                            self.combo_count + lines_cleared - 1, lines_cleared
+                        )
+                    else:
+                        # Previous combo timed out, start a new one
+                        self.combo_active = True
+                        self.first_combo_time = current_time
+                        self.combo_count = lines_cleared
+
+                self.last_line_clear_time = current_time
+                self.prev_cleared = True
+
+            # Case 2: Single line cleared
+            else:  # lines_cleared == 1
+                if not self.combo_active:
+                    # First single line - don't count as combo yet, but remember time
+                    self.last_line_clear_time = current_time
+                    self.prev_cleared = True
+                    self.combo_count = 0
+                else:
+                    # A combo is active and we cleared another single line
+                    # Check if within the time window from the first combo
+                    if current_time - self.first_combo_time < self.combo_time_window:
+                        self.combo_count += 1
+                        self.last_line_clear_time = current_time
+                        self.prev_cleared = True
+                    else:
+                        # Combo timed out, this is a new potential first line
+                        self.combo_active = False
+                        self.last_line_clear_time = current_time
+                        self.prev_cleared = True
+                        self.combo_count = (
+                            0  # Reset combo as this is just the first line
+                        )
+
+            # Special case: If we previously cleared a single line and now cleared another single
+            # within the time window, this starts a combo (requirement 1 & 2)
+            if not self.combo_active and self.prev_cleared and lines_cleared == 1:
+                if current_time - self.last_line_clear_time < self.combo_time_window:
+                    # Two singles within the window - start a combo with the FIRST line as start time
+                    self.combo_active = True
+                    self.first_combo_time = (
+                        self.last_line_clear_time
+                    )  # First line time is the start
+                    self.combo_count = 2  # Two lines make a combo
+
+            # Only create debug message if combo is active and count > 1
+            if self.combo_active and self.combo_count > 1:
+                debug_message = f"COMBO x{self.combo_count}!"
+        else:
+            # No lines cleared, check if combo timed out
+            if (
+                self.combo_active
+                and current_time - self.first_combo_time >= self.combo_time_window
+            ):
+                self.combo_active = False
+
+            if (
+                self.prev_cleared
+                and current_time - self.last_line_clear_time >= self.combo_time_window
+            ):
+                self.prev_cleared = False
+                self.combo_count = 0
+
+        # Set debug message if one was generated
+        if debug_message:
+            self.debug_message = debug_message
+            self.debug_time = current_time
+
+        # Return current combo count (for display) and any debug message
+        return {
+            "combo_count": self.combo_count if self.combo_active else 0,
+            "debug_message": debug_message,
+            "prev_cleared": self.prev_cleared,
+            "is_combo_active": self.combo_active,
+        }
+
+    def get_display(self):
+        """Get the string to display for the current combo state"""
+        if self.combo_active and self.combo_count > 1:
+            return f"{self.combo_count}"
+        elif self.prev_cleared:
+            return "1"  # Show 1 for a single clear that hasn't formed a combo yet
+        else:
+            return "-"
+
+    def get_garbage_count(self):
+        """Get the number of garbage lines to send to opponents"""
+        return self.combo_count if self.combo_active and self.combo_count > 1 else 0
+
+    def check_debug_timeout(self, current_time):
+        """Check if debug message should be cleared due to timeout"""
+        if (
+            self.debug_message
+            and current_time - self.debug_time > self.debug_display_time
+        ):
+            self.debug_message = ""
+            return True
+        return False
+
+
 # ---------------------- Main Game Loop ---------------------- #
 def run_game(
     get_next_piece,
@@ -523,8 +653,13 @@ def run_game(
     level = 1
     lines_cleared_total = 0
 
-    prev_cleared = False
-    combo_count = 0
+    # Attack tracking stats
+    attacks_sent = 0
+    attacks_received = 0
+    start_time = time.time()
+    survival_time = 0
+
+    combo_system = ComboSystem()
 
     current_piece = get_next_piece()
     next_piece = get_next_piece()
@@ -537,8 +672,15 @@ def run_game(
         my_addr = f"[::]:{listen_port}"
 
     last_fall_time = time.time()
+    game_start_time = time.time()  # Track when the game started
     fall_speed = 1.0
+    initial_fall_speed = fall_speed  # Store initial fall speed for reference
     soft_drop = False
+
+    # Parameters for gradual difficulty increase
+    speed_increase_interval = 30.0  # Increase speed every 30 seconds
+    speed_increase_rate = 0.05  # Reduce fall_speed by 5% every interval
+    last_speed_increase_time = game_start_time
 
     lock_delay = 0.5
     lock_timer = None
@@ -560,10 +702,28 @@ def run_game(
 
     # For board state updates
     last_board_update_time = time.time()
-    board_update_interval = 0.5  # Send update every half second
+    board_update_interval = 0.5
 
     try:
         while not game_over:
+            current_time = time.time()
+
+            # Check if it's time to increase the game speed
+            if current_time - last_speed_increase_time >= speed_increase_interval:
+                # Increase speed by reducing fall_speed (faster pieces)
+                fall_speed = max(
+                    fall_speed * (1 - speed_increase_rate), 0.1
+                )  # Don't allow it to get too fast
+
+                # Optional: Increase level every few speed increases
+                if (current_time - game_start_time) / speed_increase_interval % 3 == 0:
+                    level = min(level + 1, 10)  # Cap at level 10
+
+                last_speed_increase_time = current_time
+
+            # Clear combo debug message after the display time has elapsed
+            combo_system.check_debug_timeout(current_time)
+
             if net_queue is not None:
                 try:
                     while True:
@@ -572,13 +732,21 @@ def run_game(
                             try:
                                 garbage_amount = int(net_msg.split(":", 1)[1].strip())
                                 add_garbage_lines(board, garbage_amount)
+                                attacks_received += garbage_amount
+
+                                # Add debug message for opponent combo
+                                combo_system.debug_message = (
+                                    f"Opponent COMBO x{garbage_amount}!"
+                                )
+                                combo_system.debug_time = current_time
+
                                 # Immediately redraw the board to show the garbage.
                                 draw_board(
                                     stdscr,
                                     board,
                                     score,
                                     level,
-                                    f"{combo_count}" if prev_cleared else "-",
+                                    combo_system.get_display(),
                                     player_name,
                                 )
                                 draw_piece(stdscr, current_piece, board, ghost=True)
@@ -587,32 +755,45 @@ def run_game(
                                 )
                             except ValueError:
                                 pass
-                        # Handle gRPC messages (TetrisMessage objects).
                         elif (
                             hasattr(net_msg, "type")
                             and net_msg.type == tetris_pb2.GARBAGE
                         ):
-                            sender = getattr(net_msg, "sender", None)
-
-                            if sender != my_addr and not (
-                                sender
-                                and "localhost" in sender
-                                and f":{listen_port}" in sender
-                            ):
+                            try:
                                 garbage_amount = net_msg.garbage
                                 add_garbage_lines(board, garbage_amount)
+                                attacks_received += garbage_amount
+
+                                # Try to extract opponent name from extra if available
+                                opponent_name = "Opponent"
+                                if hasattr(net_msg, "extra") and net_msg.extra:
+                                    try:
+                                        opponent_name = net_msg.extra.decode().strip()
+                                    except Exception:
+                                        pass
+                                elif hasattr(net_msg, "sender") and net_msg.sender:
+                                    opponent_name = net_msg.sender
+
+                                # Add debug message for opponent combo
+                                combo_system.debug_message = (
+                                    f"{opponent_name} COMBO x{garbage_amount}!"
+                                )
+                                combo_system.debug_time = current_time
+
                                 draw_board(
                                     stdscr,
                                     board,
                                     score,
                                     level,
-                                    f"{combo_count}" if prev_cleared else "-",
+                                    combo_system.get_display(),
                                     player_name,
                                 )
                                 draw_piece(stdscr, current_piece, board, ghost=True)
                                 draw_next_and_held(
                                     stdscr, next_piece, held_piece, board
                                 )
+                            except Exception:
+                                pass
                 except queue.Empty:
                     pass
 
@@ -731,21 +912,31 @@ def run_game(
                     temp_board = [row.copy() for row in board]
                     merge_piece(temp_board, current_piece)
                     simulated_lines = clear_lines(temp_board)
+
                     if simulated_lines > 0:
-                        if prev_cleared:
-                            combo_count += 1
-                        else:
-                            combo_count = 0
-                        prev_cleared = True
-                        if client_socket and combo_count > 0:
+                        # Update combo system
+                        combo_result = combo_system.update(
+                            simulated_lines, current_time
+                        )
+
+                        # Set the debug message for combo
+                        if combo_result["debug_message"]:
+                            player_display_name = player_name if player_name else "You"
+                            combo_system.debug_message = (
+                                f"{player_display_name} {combo_result['debug_message']}"
+                            )
+
+                        # Send garbage to opponents if combo is active
+                        garbage_count = combo_system.get_garbage_count()
+                        if client_socket and garbage_count > 0:
                             try:
                                 client_socket.sendall(
-                                    f"GARBAGE:{combo_count}\n".encode()
+                                    f"GARBAGE:{garbage_count}\n".encode()
                                 )
+                                attacks_sent += garbage_count
                             except Exception:
                                 pass
-                    else:
-                        prev_cleared = False
+
                     garbage_sent = True
 
                 if lock_timer is None:
@@ -758,6 +949,18 @@ def run_game(
                 if current_time - lock_timer >= lock_delay:
                     merge_piece(board, current_piece)
                     lines = clear_lines(board)
+
+                    # Update combo system with actual cleared lines
+                    if lines > 0:
+                        combo_result = combo_system.update(lines, current_time)
+
+                        # Set the debug message for combo
+                        if combo_result["debug_message"]:
+                            player_display_name = player_name if player_name else "You"
+                            combo_system.debug_message = (
+                                f"{player_display_name} {combo_result['debug_message']}"
+                            )
+
                     score += calculate_score(lines, level)
                     lines_cleared_total += lines
                     garbage_sent = False
@@ -771,28 +974,60 @@ def run_game(
                     key_right_pressed = False
                     key_down_pressed = False
                     last_fall_time = current_time
+
                     if is_game_over(board):
                         merge_piece(board, current_piece)
+                        # Calculate final survival time
+                        survival_time = time.time() - start_time
+
+                        # Display attacks stats instead of score
                         draw_board(
                             stdscr,
                             board,
                             score,
                             level,
-                            f"{combo_count}" if prev_cleared else "-",
+                            combo_system.get_display(),
                             player_name,
                         )
                         h, w = stdscr.getmaxyx()
-                        msg = "GAME OVER! Press any key..."
-                        stdscr.addstr(
-                            h // 2, max(0, (w - len(msg)) // 2), msg, curses.A_BOLD
-                        )
+
+                        # Show attack stats
+                        attacks_msg = f"Attacks - Sent: {attacks_sent}, Received: {attacks_received}"
+                        survival_msg = f"Survival Time: {int(survival_time)} seconds"
+                        game_over_msg = "GAME OVER! Press any key..."
+
+                        try:
+                            stdscr.addstr(
+                                h // 2 - 2,
+                                max(0, (w - len(attacks_msg)) // 2),
+                                attacks_msg,
+                                curses.A_BOLD,
+                            )
+                            stdscr.addstr(
+                                h // 2 - 1,
+                                max(0, (w - len(survival_msg)) // 2),
+                                survival_msg,
+                                curses.A_BOLD,
+                            )
+                            stdscr.addstr(
+                                h // 2,
+                                max(0, (w - len(game_over_msg)) // 2),
+                                game_over_msg,
+                                curses.A_BOLD,
+                            )
+                        except curses.error:
+                            pass
+
                         stdscr.refresh()
                         stdscr.nodelay(False)
                         stdscr.getch()
                         game_over = True
                         if client_socket:
                             try:
-                                client_socket.sendall(f"LOSE:{score}\n".encode())
+                                # Send LOSE with survival time instead of score
+                                client_socket.sendall(
+                                    f"LOSE:{survival_time:.2f}:{attacks_sent}:{attacks_received}\n".encode()
+                                )
                             except Exception as e:
                                 print(f"Error sending LOSE message: {e}")
                         break
@@ -805,29 +1040,38 @@ def run_game(
                 if key == ord("q"):
                     break
                 elif key == ord(" "):
+                    # Hard drop logic
                     while not check_collision(board, current_piece, 0, 1):
                         current_piece.y += 1
                         score += 2
+
                     merge_piece(board, current_piece)
                     lines = clear_lines(board)
+
+                    # Update combo system for hard drop
                     if lines > 0:
-                        if prev_cleared:
-                            combo_count += 1
-                        else:
-                            combo_count = 0
-                        prev_cleared = True
-                        if client_socket and combo_count > 0:
+                        combo_result = combo_system.update(lines, current_time)
+
+                        # Set the debug message for combo
+                        if combo_result["debug_message"]:
+                            player_display_name = player_name if player_name else "You"
+                            combo_system.debug_message = (
+                                f"{player_display_name} {combo_result['debug_message']}"
+                            )
+
+                        # Send garbage to opponents if combo is active
+                        garbage_count = combo_system.get_garbage_count()
+                        if client_socket and garbage_count > 0:
                             try:
                                 client_socket.sendall(
-                                    f"GARBAGE:{combo_count}\n".encode()
+                                    f"GARBAGE:{garbage_count}\n".encode()
                                 )
+                                attacks_sent += garbage_count
                             except Exception:
                                 pass
-                    else:
-                        prev_cleared = False
+
                     score += calculate_score(lines, level)
                     lines_cleared_total += lines
-                    garbage_sent = False
                     current_piece = next_piece
                     next_piece = get_next_piece()
                     can_hold = True
@@ -838,25 +1082,62 @@ def run_game(
                     key_right_pressed = False
                     key_down_pressed = False
                     last_fall_time = current_time
+
                     if check_collision(board, current_piece):
                         merge_piece(board, current_piece)
+                        # Calculate final survival time
+                        survival_time = time.time() - start_time
+
+                        # Display attacks stats instead of score
                         draw_board(
                             stdscr,
                             board,
                             score,
                             level,
-                            f"{combo_count}" if prev_cleared else "-",
+                            combo_system.get_display(),
                             player_name,
                         )
                         h, w = stdscr.getmaxyx()
-                        msg = "GAME OVER! Press any key..."
-                        stdscr.addstr(
-                            h // 2, max(0, (w - len(msg)) // 2), msg, curses.A_BOLD
-                        )
+
+                        # Show attack stats
+                        attacks_msg = f"Attacks - Sent: {attacks_sent}, Received: {attacks_received}"
+                        survival_msg = f"Survival Time: {int(survival_time)} seconds"
+                        game_over_msg = "GAME OVER! Press any key..."
+
+                        try:
+                            stdscr.addstr(
+                                h // 2 - 2,
+                                max(0, (w - len(attacks_msg)) // 2),
+                                attacks_msg,
+                                curses.A_BOLD,
+                            )
+                            stdscr.addstr(
+                                h // 2 - 1,
+                                max(0, (w - len(survival_msg)) // 2),
+                                survival_msg,
+                                curses.A_BOLD,
+                            )
+                            stdscr.addstr(
+                                h // 2,
+                                max(0, (w - len(game_over_msg)) // 2),
+                                game_over_msg,
+                                curses.A_BOLD,
+                            )
+                        except curses.error:
+                            pass
+
                         stdscr.refresh()
                         stdscr.nodelay(False)
                         stdscr.getch()
                         game_over = True
+                        if client_socket:
+                            try:
+                                # Send LOSE with survival time instead of score
+                                client_socket.sendall(
+                                    f"LOSE:{survival_time:.2f}:{attacks_sent}:{attacks_received}\n".encode()
+                                )
+                            except Exception as e:
+                                print(f"Error sending LOSE message: {e}")
                         break
                 elif key == ord("c"):
                     if can_hold:
@@ -874,6 +1155,7 @@ def run_game(
                         last_fall_time = current_time
 
             if not touching_ground:
+                # Use the updated fall_speed
                 fall_delay = fall_speed / level
                 if soft_drop:
                     fall_delay *= 0.1
@@ -883,7 +1165,7 @@ def run_game(
                         score += 1
                     last_fall_time = current_time
 
-            combo_display = f"{combo_count}" if prev_cleared else "-"
+            combo_display = combo_system.get_display()
             if not draw_board(stdscr, board, score, level, combo_display, player_name):
                 time.sleep(1)
                 continue
@@ -894,6 +1176,28 @@ def run_game(
             # Draw other players' boards if available
             if peer_boards is not None and peer_boards_lock is not None:
                 draw_other_players_boards(stdscr, peer_boards, board, peer_boards_lock)
+
+            # Draw combo debug message if it exists
+            if combo_system.debug_message:
+                try:
+                    h, w = stdscr.getmaxyx()
+                    board_height = BOARD_HEIGHT + 2
+                    board_width = BOARD_WIDTH * 2 + 2
+                    start_y = max(0, (h - board_height) // 2)
+
+                    # Display at the top of the screen in a highlighted style
+                    debug_y = max(0, start_y - 4)
+                    debug_x = max(0, (w - len(combo_system.debug_message)) // 2)
+
+                    # Add a visual highlight to make it stand out
+                    stdscr.addstr(
+                        debug_y,
+                        debug_x,
+                        combo_system.debug_message,
+                        curses.A_BOLD | curses.A_REVERSE,
+                    )
+                except curses.error:
+                    pass  # Handle potential out-of-bounds errors
 
             # Send board state updates periodically
             if (
@@ -922,7 +1226,12 @@ def run_game(
                 client_socket.sendall(board_state_msg)
                 last_board_update_time = current_time
 
-        return score
+        # Return attack stats and survival time as a tuple instead of just score
+        return {
+            "survival_time": survival_time,
+            "attacks_sent": attacks_sent,
+            "attacks_received": attacks_received,
+        }
     finally:
         curses.endwin()
 
@@ -930,6 +1239,6 @@ def run_game(
 if __name__ == "__main__":
     seed = random.randint(0, 1000000)
     get_next_piece = create_piece_generator(seed)
-    final_score = run_game(get_next_piece)
+    final_stats = run_game(get_next_piece)
     print("Game Over!")
-    print(f"Final Score: {final_score}")
+    print(f"Final Stats: {final_stats}")
