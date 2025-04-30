@@ -547,132 +547,223 @@ def get_piece_shape(piece_type, rotation):
 
 
 # ComboSystem class to handle combo logic
+# class ComboSystem:
+#     def __init__(self):
+#         self.combo_count = 0
+#         self.last_line_clear_time = 0
+#         self.combo_time_window = 5.0  # Time window for combos in seconds
+#         self.prev_cleared = False
+#         self.combo_active = False  # Track if a combo is currently active
+#         self.first_combo_time = 0  # When the first combo was detected
+#         self.debug_message = ""
+#         self.debug_time = 0
+#         self.debug_display_time = 5.0  # Display debug message for 5 seconds
+
+#     def update(self, lines_cleared, current_time):
+#         """Update combo state based on lines cleared at current time"""
+#         debug_message = None
+
+#         # Add detailed logging at the start of the update
+#         print(
+#             f"[COMBO DEBUG] update called: lines_cleared={lines_cleared}, time={current_time:.2f}"
+#         )
+#         print(
+#             f"[COMBO DEBUG]  - Before: active={self.combo_active}, count={self.combo_count}, prev_cleared={self.prev_cleared}, first_time={self.first_combo_time:.2f}, last_clear_time={self.last_line_clear_time:.2f}"
+#         )
+
+#         if lines_cleared > 0:
+#             # Case 1: Multiple lines cleared at once - always starts or continues a combo
+#             if lines_cleared >= 2:
+#                 # Multiple lines cleared at once is always a combo
+#                 if not self.combo_active:
+#                     # Starting a new combo with multiple lines
+#                     print(
+#                         f"[COMBO DEBUG]  - Starting new combo (multi-line: {lines_cleared})"
+#                     )
+#                     self.combo_active = True
+#                     self.first_combo_time = current_time
+#                     self.combo_count = lines_cleared
+#                 else:
+#                     # Continue existing combo with multiple lines
+#                     if current_time - self.first_combo_time < self.combo_time_window:
+#                         print(
+#                             f"[COMBO DEBUG]  - Continuing combo (multi-line: {lines_cleared}), old_count={self.combo_count}"
+#                         )
+#                         self.combo_count = max(
+#                             self.combo_count + lines_cleared - 1, lines_cleared
+#                         )
+#                         print(
+#                             f"[COMBO DEBUG]  - Continuing combo, new_count={self.combo_count}"
+#                         )
+#                     else:
+#                         # Previous combo timed out, start a new one
+#                         print(
+#                             f"[COMBO DEBUG]  - Combo timed out, starting new combo (multi-line: {lines_cleared})"
+#                         )
+#                         self.combo_active = True
+#                         self.first_combo_time = current_time
+#                         self.combo_count = lines_cleared
+
+#                 self.last_line_clear_time = current_time
+#                 self.prev_cleared = True
+
+#             # Case 2: Single line cleared
+#             else:  # lines_cleared == 1
+#                 if not self.combo_active:
+#                     # First single line - don't count as combo yet, but remember time
+#                     print(
+#                         "[COMBO DEBUG]  - First single line clear (potential combo start)"
+#                     )
+#                     self.last_line_clear_time = current_time
+#                     self.prev_cleared = True
+#                     self.combo_count = 0
+#                 else:
+#                     # A combo is active and we cleared another single line
+#                     # Check if within the time window from the first combo
+#                     if current_time - self.first_combo_time < self.combo_time_window:
+#                         print(
+#                             f"[COMBO DEBUG]  - Continuing combo (single line), old_count={self.combo_count}"
+#                         )
+#                         self.combo_count += 1
+#                         print(
+#                             f"[COMBO DEBUG]  - Continuing combo, new_count={self.combo_count}"
+#                         )
+#                         self.last_line_clear_time = current_time
+#                         self.prev_cleared = True
+#                     else:
+#                         # Combo timed out, this is a new potential first line
+#                         print(
+#                             "[COMBO DEBUG]  - Combo timed out, new potential first line"
+#                         )
+#                         self.combo_active = False
+#                         self.last_line_clear_time = current_time
+#                         self.prev_cleared = True
+#                         self.combo_count = (
+#                             0  # Reset combo as this is just the first line
+#                         )
+
+#             # Special case: If we previously cleared a single line and now cleared another single
+#             # within the time window, this starts a combo (requirement 1 & 2)
+#             if not self.combo_active and self.prev_cleared and lines_cleared == 1:
+#                 if current_time - self.last_line_clear_time < self.combo_time_window:
+#                     # Two singles within the window - start a combo with the FIRST line as start time
+#                     print("[COMBO DEBUG]  - Starting combo (two singles within window)")
+#                     self.combo_active = True
+#                     self.first_combo_time = (
+#                         self.last_line_clear_time
+#                     )  # First line time is the start
+#                     self.combo_count = 2  # Two lines make a combo
+
+#             # Only create debug message if combo is active and count > 1
+#             if self.combo_active and self.combo_count > 1:
+#                 debug_message = f"COMBO x{self.combo_count}!"
+#         else:
+#             # No lines cleared, check if combo timed out
+#             if (
+#                 self.combo_active
+#                 and current_time - self.first_combo_time >= self.combo_time_window
+#             ):
+#                 print("[COMBO DEBUG]  - Combo timed out (no lines cleared)")
+#                 self.combo_active = False
+
+#             if (
+#                 self.prev_cleared
+#                 and current_time - self.last_line_clear_time >= self.combo_time_window
+#             ):
+#                 print("[COMBO DEBUG]  - Previous clear timed out (no lines cleared)")
+#                 self.prev_cleared = False
+#                 self.combo_count = 0
+
+#         # Set debug message if one was generated
+#         if debug_message:
+#             self.debug_message = debug_message
+#             self.debug_time = current_time
+
+#         # Add detailed logging at the end of the update
+#         print(
+#             f"[COMBO DEBUG]  - After: active={self.combo_active}, count={self.combo_count}, prev_cleared={self.prev_cleared}, first_time={self.first_combo_time:.2f}, last_clear_time={self.last_line_clear_time:.2f}"
+#         )
+
+#         # Return current combo count (for display) and any debug message
+#         return {
+#             "combo_count": self.combo_count if self.combo_active else 0,
+#             "debug_message": debug_message,
+#             "prev_cleared": self.prev_cleared,
+#             "is_combo_active": self.combo_active,
+#         }
+
+#     def get_display(self):
+#         """Get the string to display for the current combo state"""
+#         if self.combo_active and self.combo_count > 1:
+#             return f"{self.combo_count}"
+#         elif self.prev_cleared:
+#             return "1"  # Show 1 for a single clear that hasn't formed a combo yet
+#         else:
+#             return "-"
+
+#     def get_garbage_count(self):
+#         """Get the number of garbage lines to send to opponents"""
+#         count = self.combo_count if self.combo_active and self.combo_count > 1 else 0
+#         print(
+#             f"[COMBO DEBUG] get_garbage_count: active={self.combo_active}, count={self.combo_count}, returning={count}"
+#         )
+#         return count
+
+#     def check_debug_timeout(self, current_time):
+#         """Check if debug message should be cleared due to timeout"""
+#         if (
+#             self.debug_message
+#             and current_time - self.debug_time > self.debug_display_time
+#         ):
+#             self.debug_message = ""
+#             return True
+#         return False
+
+# ComboSystem class to handle combo logic
 class ComboSystem:
     def __init__(self):
         self.combo_count = 0
-        self.last_line_clear_time = 0
-        self.combo_time_window = 5.0  # Time window for combos in seconds
-        self.prev_cleared = False
-        self.combo_active = False  # Track if a combo is currently active
-        self.first_combo_time = 0  # When the first combo was detected
         self.debug_message = ""
         self.debug_time = 0
         self.debug_display_time = 5.0  # Display debug message for 5 seconds
+        # Track if we've cleared lines in the last placement
+        self.last_placement_cleared_lines = False
+        # Track total garbage lines sent in this combo
+        self.total_combo_garbage_sent = 0
+        print("[COMBO DEBUG] Initialized combo system")
 
     def update(self, lines_cleared, current_time):
         """Update combo state based on lines cleared at current time"""
         debug_message = None
 
         # Add detailed logging at the start of the update
-        print(
-            f"[COMBO DEBUG] update called: lines_cleared={lines_cleared}, time={current_time:.2f}"
-        )
-        print(
-            f"[COMBO DEBUG]  - Before: active={self.combo_active}, count={self.combo_count}, prev_cleared={self.prev_cleared}, first_time={self.first_combo_time:.2f}, last_clear_time={self.last_line_clear_time:.2f}"
-        )
+        print(f"[COMBO DEBUG] update called: lines_cleared={lines_cleared}, time={current_time:.2f}")
+        print(f"[COMBO DEBUG]  - Before: count={self.combo_count}")
 
         if lines_cleared > 0:
-            # Case 1: Multiple lines cleared at once - always starts or continues a combo
-            if lines_cleared >= 2:
-                # Multiple lines cleared at once is always a combo
-                if not self.combo_active:
-                    # Starting a new combo with multiple lines
-                    print(
-                        f"[COMBO DEBUG]  - Starting new combo (multi-line: {lines_cleared})"
-                    )
-                    self.combo_active = True
-                    self.first_combo_time = current_time
-                    self.combo_count = lines_cleared
-                else:
-                    # Continue existing combo with multiple lines
-                    if current_time - self.first_combo_time < self.combo_time_window:
-                        print(
-                            f"[COMBO DEBUG]  - Continuing combo (multi-line: {lines_cleared}), old_count={self.combo_count}"
-                        )
-                        self.combo_count = max(
-                            self.combo_count + lines_cleared - 1, lines_cleared
-                        )
-                        print(
-                            f"[COMBO DEBUG]  - Continuing combo, new_count={self.combo_count}"
-                        )
-                    else:
-                        # Previous combo timed out, start a new one
-                        print(
-                            f"[COMBO DEBUG]  - Combo timed out, starting new combo (multi-line: {lines_cleared})"
-                        )
-                        self.combo_active = True
-                        self.first_combo_time = current_time
-                        self.combo_count = lines_cleared
-
-                self.last_line_clear_time = current_time
-                self.prev_cleared = True
-
-            # Case 2: Single line cleared
-            else:  # lines_cleared == 1
-                if not self.combo_active:
-                    # First single line - don't count as combo yet, but remember time
-                    print(
-                        "[COMBO DEBUG]  - First single line clear (potential combo start)"
-                    )
-                    self.last_line_clear_time = current_time
-                    self.prev_cleared = True
-                    self.combo_count = 0
-                else:
-                    # A combo is active and we cleared another single line
-                    # Check if within the time window from the first combo
-                    if current_time - self.first_combo_time < self.combo_time_window:
-                        print(
-                            f"[COMBO DEBUG]  - Continuing combo (single line), old_count={self.combo_count}"
-                        )
-                        self.combo_count += 1
-                        print(
-                            f"[COMBO DEBUG]  - Continuing combo, new_count={self.combo_count}"
-                        )
-                        self.last_line_clear_time = current_time
-                        self.prev_cleared = True
-                    else:
-                        # Combo timed out, this is a new potential first line
-                        print(
-                            "[COMBO DEBUG]  - Combo timed out, new potential first line"
-                        )
-                        self.combo_active = False
-                        self.last_line_clear_time = current_time
-                        self.prev_cleared = True
-                        self.combo_count = (
-                            0  # Reset combo as this is just the first line
-                        )
-
-            # Special case: If we previously cleared a single line and now cleared another single
-            # within the time window, this starts a combo (requirement 1 & 2)
-            if not self.combo_active and self.prev_cleared and lines_cleared == 1:
-                if current_time - self.last_line_clear_time < self.combo_time_window:
-                    # Two singles within the window - start a combo with the FIRST line as start time
-                    print("[COMBO DEBUG]  - Starting combo (two singles within window)")
-                    self.combo_active = True
-                    self.first_combo_time = (
-                        self.last_line_clear_time
-                    )  # First line time is the start
-                    self.combo_count = 2  # Two lines make a combo
-
-            # Only create debug message if combo is active and count > 1
-            if self.combo_active and self.combo_count > 1:
-                debug_message = f"COMBO x{self.combo_count}!"
+            # Lines cleared in this placement
+            if self.last_placement_cleared_lines:
+                # Previous placement also cleared lines, so increment combo
+                self.combo_count += 1
+                print(f"[COMBO DEBUG]  - Previous placement cleared lines too. Incrementing combo to {self.combo_count}")
+                
+                # Show combo message if 2 or more in combo count
+                if self.combo_count >= 1:  # In Jstris, even the first combo (consecutive clears) gets a message
+                    debug_message = f"COMBO x{self.combo_count}!"
+            else:
+                # First line clear in a potential combo
+                self.combo_count = 0  # Reset to 0 as this is potentially the first part of a new combo
+                print(f"[COMBO DEBUG]  - First line clear, setting combo to {self.combo_count}")
+            
+            # Remember that this placement cleared lines
+            self.last_placement_cleared_lines = True
         else:
-            # No lines cleared, check if combo timed out
-            if (
-                self.combo_active
-                and current_time - self.first_combo_time >= self.combo_time_window
-            ):
-                print("[COMBO DEBUG]  - Combo timed out (no lines cleared)")
-                self.combo_active = False
-
-            if (
-                self.prev_cleared
-                and current_time - self.last_line_clear_time >= self.combo_time_window
-            ):
-                print("[COMBO DEBUG]  - Previous clear timed out (no lines cleared)")
-                self.prev_cleared = False
-                self.combo_count = 0
+            # No lines cleared, reset combo
+            if self.combo_count > 0 or self.last_placement_cleared_lines:
+                print(f"[COMBO DEBUG]  - No lines cleared, resetting combo from {self.combo_count} to 0")
+            self.combo_count = 0
+            self.last_placement_cleared_lines = False
+            self.total_combo_garbage_sent = 0  # Reset garbage tracking for the combo
 
         # Set debug message if one was generated
         if debug_message:
@@ -680,41 +771,37 @@ class ComboSystem:
             self.debug_time = current_time
 
         # Add detailed logging at the end of the update
-        print(
-            f"[COMBO DEBUG]  - After: active={self.combo_active}, count={self.combo_count}, prev_cleared={self.prev_cleared}, first_time={self.first_combo_time:.2f}, last_clear_time={self.last_line_clear_time:.2f}"
-        )
+        print(f"[COMBO DEBUG]  - After: count={self.combo_count}, last_cleared={self.last_placement_cleared_lines}")
 
         # Return current combo count (for display) and any debug message
         return {
-            "combo_count": self.combo_count if self.combo_active else 0,
+            "combo_count": self.combo_count,
             "debug_message": debug_message,
-            "prev_cleared": self.prev_cleared,
-            "is_combo_active": self.combo_active,
+            "is_combo_active": self.last_placement_cleared_lines
         }
 
     def get_display(self):
         """Get the string to display for the current combo state"""
-        if self.combo_active and self.combo_count > 1:
+        if self.combo_count > 0:
             return f"{self.combo_count}"
-        elif self.prev_cleared:
-            return "1"  # Show 1 for a single clear that hasn't formed a combo yet
+        elif self.last_placement_cleared_lines:
+            return "0"  # Show 0 when we've cleared lines but no combo yet
         else:
-            return "-"
+            return "-"  # Show dash when no active combo
 
     def get_garbage_count(self):
-        """Get the number of garbage lines to send to opponents"""
-        count = self.combo_count if self.combo_active and self.combo_count > 1 else 0
-        print(
-            f"[COMBO DEBUG] get_garbage_count: active={self.combo_active}, count={self.combo_count}, returning={count}"
-        )
-        return count
+        """Get the number of garbage lines to send to opponents based on Jstris rules"""
+        # In Jstris, combo garbage follows this pattern: 0, 1, 1, 2, 2, 3, 3, ...
+        # This is different from "combo count - 1" formula
+        if self.combo_count >= 1:
+            garbage_count = (self.combo_count + 1) // 2  # Integer division
+            print(f"[COMBO DEBUG] get_garbage_count: count={self.combo_count}, returning={garbage_count}")
+            return garbage_count
+        return 0
 
     def check_debug_timeout(self, current_time):
         """Check if debug message should be cleared due to timeout"""
-        if (
-            self.debug_message
-            and current_time - self.debug_time > self.debug_display_time
-        ):
+        if self.debug_message and current_time - self.debug_time > self.debug_display_time:
             self.debug_message = ""
             return True
         return False
@@ -1006,24 +1093,32 @@ def run_game(
                         last_move_time = current_time
 
             if touching_ground:
-                if not garbage_sent:
-                    temp_board = [row.copy() for row in board]
-                    merge_piece(temp_board, current_piece)
-                    simulated_lines = clear_lines(temp_board)
+                if lock_timer is None:
+                    lock_timer = current_time
+                    landing_y = current_piece.y
+                elif current_piece.y != landing_y:
+                    lock_timer = current_time
+                    landing_y = current_piece.y
 
-                    if simulated_lines > 0:
-                        # Update combo system
-                        combo_result = combo_system.update(
-                            simulated_lines, current_time
-                        )
+                if current_time - lock_timer >= lock_delay:
+                    # Merge the piece to the board
+                    merge_piece(board, current_piece)
+                    lines = clear_lines(board)
 
-                        # Set the debug message for combo
-                        if combo_result["debug_message"]:
-                            player_display_name = player_name if player_name else "You"
-                            combo_system.debug_message = (
-                                f"{player_display_name} {combo_result['debug_message']}"
-                            )
+                    # Update combo system with actual cleared lines
+                    combo_result = combo_system.update(lines, current_time)
 
+                    # Set the debug message for combo if there is one
+                    if combo_result["debug_message"]:
+                        player_display_name = player_name if player_name else "You"
+                        combo_system.debug_message = f"{player_display_name} {combo_result['debug_message']}"
+                        
+                    # Calculate score based on lines cleared
+                    score += calculate_score(lines, level)
+                    lines_cleared_total += lines
+                    
+                    # Send garbage if we have a combo running and lines were cleared
+                    if lines > 0:
                         # Send garbage to opponents if combo is active
                         garbage_count = combo_system.get_garbage_count()
                         if client_socket and garbage_count > 0:
@@ -1045,34 +1140,8 @@ def run_game(
                                         attacks_sent += garbage_count
                             except Exception as e:
                                 print(f"[ERROR] Failed to target worst player: {e}")
-
-                    garbage_sent = True
-
-                if lock_timer is None:
-                    lock_timer = current_time
-                    landing_y = current_piece.y
-                elif current_piece.y != landing_y:
-                    lock_timer = current_time
-                    landing_y = current_piece.y
-
-                if current_time - lock_timer >= lock_delay:
-                    merge_piece(board, current_piece)
-                    lines = clear_lines(board)
-
-                    # Update combo system with actual cleared lines
-                    if lines > 0:
-                        combo_result = combo_system.update(lines, current_time)
-
-                        # Set the debug message for combo
-                        if combo_result["debug_message"]:
-                            player_display_name = player_name if player_name else "You"
-                            combo_system.debug_message = (
-                                f"{player_display_name} {combo_result['debug_message']}"
-                            )
-
-                    score += calculate_score(lines, level)
-                    lines_cleared_total += lines
-                    garbage_sent = False
+                    
+                    # Reset for next piece
                     current_piece = next_piece
                     next_piece = get_next_piece()
                     can_hold = True
@@ -1154,33 +1223,47 @@ def run_game(
                         current_piece.y += 1
                         score += 2
 
+                    # Merge the piece to the board immediately after hard drop
                     merge_piece(board, current_piece)
                     lines = clear_lines(board)
 
-                    # Update combo system for hard drop
+                    # Update combo system with actual cleared lines
+                    combo_result = combo_system.update(lines, current_time)
+
+                    # Set the debug message for combo if there is one
+                    if combo_result["debug_message"]:
+                        player_display_name = player_name if player_name else "You"
+                        combo_system.debug_message = f"{player_display_name} {combo_result['debug_message']}"
+                        
+                    # Calculate score based on lines cleared
+                    score += calculate_score(lines, level)
+                    lines_cleared_total += lines
+                    
+                    # Send garbage if we have a combo running and lines were cleared
                     if lines > 0:
-                        combo_result = combo_system.update(lines, current_time)
-
-                        # Set the debug message for combo
-                        if combo_result["debug_message"]:
-                            player_display_name = player_name if player_name else "You"
-                            combo_system.debug_message = (
-                                f"{player_display_name} {combo_result['debug_message']}"
-                            )
-
                         # Send garbage to opponents if combo is active
                         garbage_count = combo_system.get_garbage_count()
                         if client_socket and garbage_count > 0:
-                            with peer_boards_lock:
-                                if peer_boards:
-                                    worst_peer = min(peer_boards.items(), 
-                                                key=lambda item: item[1]['score'])[0]
-                                    client_socket.send(worst_peer,  # Use send with target
-                                                    f"GARBAGE:{garbage_count}\n".encode())
-                                    attacks_sent += garbage_count
-
-                    score += calculate_score(lines, level)
-                    lines_cleared_total += lines
+                            try:
+                                with peer_boards_lock:
+                                    if peer_boards:
+                                        # Find peer with lowest score (worst performer)
+                                        worst_peer_id, worst_peer_data = min(
+                                            peer_boards.items(), 
+                                            key=lambda item: item[1]['score']
+                                        )
+                                        print(f"[STRATEGY] Targeting worst player {worst_peer_id} "
+                                            f"(score: {worst_peer_data['score']})")
+                                        
+                                        client_socket.send(
+                                            worst_peer_id,
+                                            f"GARBAGE:{garbage_count}\n".encode()
+                                        )
+                                        attacks_sent += garbage_count
+                            except Exception as e:
+                                print(f"[ERROR] Failed to target worst player: {e}")
+                    
+                    # Reset for next piece
                     current_piece = next_piece
                     next_piece = get_next_piece()
                     can_hold = True
