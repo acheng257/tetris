@@ -13,6 +13,8 @@ locale.setlocale(locale.LC_ALL, "")
 BOARD_WIDTH = 10
 BOARD_HEIGHT = 20
 EMPTY_CELL = 0
+# Define a specific color for garbage blocks - 8 is used for the border
+GARBAGE_COLOR = 8  # Color index for gray garbage blocks
 
 TETROMINOES = {
     "I": {"shape": [[1, 1, 1, 1]], "color": 1},
@@ -33,7 +35,8 @@ COLORS = {
     5: curses.COLOR_RED,
     6: curses.COLOR_BLUE,
     7: curses.COLOR_WHITE,
-    8: curses.COLOR_WHITE,
+    8: curses.COLOR_WHITE,  # Used for borders and now also for garbage blocks
+    GARBAGE_COLOR: curses.COLOR_WHITE,  # Ensure the garbage color is defined
 }
 
 LEFT = {"x": -1, "y": 0}
@@ -72,8 +75,13 @@ class Piece:
 # ------------------ Drawing and Utility Functions ------------------ #
 def init_colors():
     curses.start_color()
+    # Initialize standard colors for pieces
     for i, color in COLORS.items():
         curses.init_pair(i + 1, color, curses.COLOR_BLACK)
+
+    # Special color for garbage blocks - gray on black
+    # Use dim white (or if supported, a true gray color)
+    curses.init_pair(GARBAGE_COLOR + 1, curses.COLOR_WHITE, curses.COLOR_BLACK)
 
 
 def create_board():
@@ -124,10 +132,19 @@ def draw_board(stdscr, board, score, level, combo_display, player_name=None):
         for y, row in enumerate(board):
             for x, cell in enumerate(row):
                 if cell != EMPTY_CELL:
-                    color_pair = curses.color_pair(cell + 1)
-                    stdscr.addstr(
-                        start_y + 1 + y, start_x + 1 + x * 2, "[]", color_pair
-                    )
+                    # Use special rendering for garbage blocks
+                    if cell == GARBAGE_COLOR:
+                        # Use white color with dim attribute for gray appearance
+                        color_pair = curses.color_pair(cell + 1) | curses.A_DIM
+                        stdscr.addstr(
+                            start_y + 1 + y, start_x + 1 + x * 2, "░░", color_pair
+                        )
+                    else:
+                        # Normal rendering for regular tetromino blocks
+                        color_pair = curses.color_pair(cell + 1)
+                        stdscr.addstr(
+                            start_y + 1 + y, start_x + 1 + x * 2, "[]", color_pair
+                        )
                 else:
                     stdscr.addstr(start_y + 1 + y, start_x + 1 + x * 2, "  ")
 
@@ -295,13 +312,29 @@ def create_piece_generator(seed):
 def add_garbage_lines(board, count):
     """
     Remove count rows from the top and append count garbage rows with one random gap.
+    The garbage lines are filled with gray blocks except for one random gap in each row.
     """
-    for _ in range(count):
+    print(f"[GARBAGE DEBUG] Adding {count} garbage lines to board")
+    print(f"[GARBAGE DEBUG] Board before: {len(board)} rows, should be {BOARD_HEIGHT}")
+
+    for i in range(count):
+        # Create a visually distinct garbage line
         gap = random.randint(0, BOARD_WIDTH - 1)
-        garbage_line = [random.randint(1, 7) for _ in range(BOARD_WIDTH)]
-        garbage_line[gap] = EMPTY_CELL
+
+        # Use the gray color for garbage blocks to make them visually distinct
+        garbage_line = [GARBAGE_COLOR for _ in range(BOARD_WIDTH)]
+        garbage_line[gap] = EMPTY_CELL  # Add random gap
+
+        # Remove top row and add garbage to bottom
         board.pop(0)
         board.append(garbage_line)
+
+        print(
+            f"[GARBAGE DEBUG] Added garbage line {i+1}/{count} with gap at position {gap}, using gray color"
+        )
+
+    print(f"[GARBAGE DEBUG] Board after: {len(board)} rows, should be {BOARD_HEIGHT}")
+    return True
 
 
 def draw_other_players_boards(stdscr, peer_boards, board, peer_boards_lock):
@@ -398,13 +431,25 @@ def draw_other_players_boards(stdscr, peer_boards, board, peer_boards_lock):
                         if y < len(peer_board) and x < len(peer_board[y]):
                             cell = peer_board[y][x]
                             if cell != EMPTY_CELL:
-                                color_pair = curses.color_pair(cell + 1)
-                                stdscr.addstr(
-                                    board_y + mini_y + 1,
-                                    board_x + 1 + x,
-                                    "#",
-                                    color_pair,
-                                )
+                                # Special rendering for garbage blocks
+                                if cell == GARBAGE_COLOR:
+                                    color_pair = (
+                                        curses.color_pair(cell + 1) | curses.A_DIM
+                                    )
+                                    stdscr.addstr(
+                                        board_y + mini_y + 1,
+                                        board_x + 1 + x,
+                                        "░",
+                                        color_pair,
+                                    )
+                                else:
+                                    color_pair = curses.color_pair(cell + 1)
+                                    stdscr.addstr(
+                                        board_y + mini_y + 1,
+                                        board_x + 1 + x,
+                                        "#",
+                                        color_pair,
+                                    )
 
                 # Draw active piece if available
                 if "active_piece" in peer_data:
@@ -518,23 +563,43 @@ class ComboSystem:
         """Update combo state based on lines cleared at current time"""
         debug_message = None
 
+        # Add detailed logging at the start of the update
+        print(
+            f"[COMBO DEBUG] update called: lines_cleared={lines_cleared}, time={current_time:.2f}"
+        )
+        print(
+            f"[COMBO DEBUG]  - Before: active={self.combo_active}, count={self.combo_count}, prev_cleared={self.prev_cleared}, first_time={self.first_combo_time:.2f}, last_clear_time={self.last_line_clear_time:.2f}"
+        )
+
         if lines_cleared > 0:
             # Case 1: Multiple lines cleared at once - always starts or continues a combo
             if lines_cleared >= 2:
                 # Multiple lines cleared at once is always a combo
                 if not self.combo_active:
                     # Starting a new combo with multiple lines
+                    print(
+                        f"[COMBO DEBUG]  - Starting new combo (multi-line: {lines_cleared})"
+                    )
                     self.combo_active = True
                     self.first_combo_time = current_time
                     self.combo_count = lines_cleared
                 else:
                     # Continue existing combo with multiple lines
                     if current_time - self.first_combo_time < self.combo_time_window:
+                        print(
+                            f"[COMBO DEBUG]  - Continuing combo (multi-line: {lines_cleared}), old_count={self.combo_count}"
+                        )
                         self.combo_count = max(
                             self.combo_count + lines_cleared - 1, lines_cleared
                         )
+                        print(
+                            f"[COMBO DEBUG]  - Continuing combo, new_count={self.combo_count}"
+                        )
                     else:
                         # Previous combo timed out, start a new one
+                        print(
+                            f"[COMBO DEBUG]  - Combo timed out, starting new combo (multi-line: {lines_cleared})"
+                        )
                         self.combo_active = True
                         self.first_combo_time = current_time
                         self.combo_count = lines_cleared
@@ -546,6 +611,9 @@ class ComboSystem:
             else:  # lines_cleared == 1
                 if not self.combo_active:
                     # First single line - don't count as combo yet, but remember time
+                    print(
+                        "[COMBO DEBUG]  - First single line clear (potential combo start)"
+                    )
                     self.last_line_clear_time = current_time
                     self.prev_cleared = True
                     self.combo_count = 0
@@ -553,11 +621,20 @@ class ComboSystem:
                     # A combo is active and we cleared another single line
                     # Check if within the time window from the first combo
                     if current_time - self.first_combo_time < self.combo_time_window:
+                        print(
+                            f"[COMBO DEBUG]  - Continuing combo (single line), old_count={self.combo_count}"
+                        )
                         self.combo_count += 1
+                        print(
+                            f"[COMBO DEBUG]  - Continuing combo, new_count={self.combo_count}"
+                        )
                         self.last_line_clear_time = current_time
                         self.prev_cleared = True
                     else:
                         # Combo timed out, this is a new potential first line
+                        print(
+                            "[COMBO DEBUG]  - Combo timed out, new potential first line"
+                        )
                         self.combo_active = False
                         self.last_line_clear_time = current_time
                         self.prev_cleared = True
@@ -570,6 +647,7 @@ class ComboSystem:
             if not self.combo_active and self.prev_cleared and lines_cleared == 1:
                 if current_time - self.last_line_clear_time < self.combo_time_window:
                     # Two singles within the window - start a combo with the FIRST line as start time
+                    print("[COMBO DEBUG]  - Starting combo (two singles within window)")
                     self.combo_active = True
                     self.first_combo_time = (
                         self.last_line_clear_time
@@ -585,12 +663,14 @@ class ComboSystem:
                 self.combo_active
                 and current_time - self.first_combo_time >= self.combo_time_window
             ):
+                print("[COMBO DEBUG]  - Combo timed out (no lines cleared)")
                 self.combo_active = False
 
             if (
                 self.prev_cleared
                 and current_time - self.last_line_clear_time >= self.combo_time_window
             ):
+                print("[COMBO DEBUG]  - Previous clear timed out (no lines cleared)")
                 self.prev_cleared = False
                 self.combo_count = 0
 
@@ -598,6 +678,11 @@ class ComboSystem:
         if debug_message:
             self.debug_message = debug_message
             self.debug_time = current_time
+
+        # Add detailed logging at the end of the update
+        print(
+            f"[COMBO DEBUG]  - After: active={self.combo_active}, count={self.combo_count}, prev_cleared={self.prev_cleared}, first_time={self.first_combo_time:.2f}, last_clear_time={self.last_line_clear_time:.2f}"
+        )
 
         # Return current combo count (for display) and any debug message
         return {
@@ -618,7 +703,11 @@ class ComboSystem:
 
     def get_garbage_count(self):
         """Get the number of garbage lines to send to opponents"""
-        return self.combo_count if self.combo_active and self.combo_count > 1 else 0
+        count = self.combo_count if self.combo_active and self.combo_count > 1 else 0
+        print(
+            f"[COMBO DEBUG] get_garbage_count: active={self.combo_active}, count={self.combo_count}, returning={count}"
+        )
+        return count
 
     def check_debug_timeout(self, current_time):
         """Check if debug message should be cleared due to timeout"""
@@ -731,6 +820,9 @@ def run_game(
                         if isinstance(net_msg, str) and net_msg.startswith("GARBAGE:"):
                             try:
                                 garbage_amount = int(net_msg.split(":", 1)[1].strip())
+                                print(
+                                    f"[GARBAGE RECEIVE DEBUG] Received string GARBAGE message: {garbage_amount} lines"
+                                )
                                 add_garbage_lines(board, garbage_amount)
                                 attacks_received += garbage_amount
 
@@ -761,6 +853,9 @@ def run_game(
                         ):
                             try:
                                 garbage_amount = net_msg.garbage
+                                print(
+                                    f"[GARBAGE RECEIVE DEBUG] Received protobuf GARBAGE message: {garbage_amount} lines from {net_msg.sender}"
+                                )
                                 add_garbage_lines(board, garbage_amount)
                                 attacks_received += garbage_amount
 
@@ -792,7 +887,10 @@ def run_game(
                                 draw_next_and_held(
                                     stdscr, next_piece, held_piece, board
                                 )
-                            except Exception:
+                            except Exception as e:
+                                print(
+                                    f"[GARBAGE RECEIVE DEBUG] Error processing protobuf GARBAGE: {e}"
+                                )
                                 pass
                 except queue.Empty:
                     pass
@@ -930,6 +1028,9 @@ def run_game(
                         garbage_count = combo_system.get_garbage_count()
                         if client_socket and garbage_count > 0:
                             try:
+                                print(
+                                    f"[GARBAGE SEND DEBUG] Attempting to send {garbage_count} garbage lines."
+                                )
                                 client_socket.sendall(
                                     f"GARBAGE:{garbage_count}\n".encode()
                                 )
@@ -1063,6 +1164,9 @@ def run_game(
                         garbage_count = combo_system.get_garbage_count()
                         if client_socket and garbage_count > 0:
                             try:
+                                print(
+                                    f"[GARBAGE SEND DEBUG] Attempting to send {garbage_count} garbage lines (hard drop)."
+                                )
                                 client_socket.sendall(
                                     f"GARBAGE:{garbage_count}\n".encode()
                                 )

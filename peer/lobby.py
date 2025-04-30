@@ -101,6 +101,9 @@ def main(listen_port, peer_addrs):
     peer_boards = {}
     peer_boards_lock = threading.Lock()
 
+    # Queue for forwarding GARBAGE messages to the game
+    game_message_queue = queue.Queue()
+
     # Thread to process incoming game state messages
     def process_game_states():
         nonlocal seed
@@ -178,6 +181,23 @@ def main(listen_port, peer_addrs):
                     print("=====================")
                     results_received = True
                     results_received_event.set()
+                elif msg.type == tetris_pb2.GARBAGE:
+                    if peer_id != listen_addr:  # Don't apply our own garbage
+                        print(
+                            f"[LOBBY DEBUG] Received GARBAGE message from {peer_id}: {msg.garbage} lines"
+                        )
+                        try:
+                            # Put GARBAGE message in queue for game to consume
+                            game_message_queue.put(f"GARBAGE:{msg.garbage}")
+                            print(
+                                f"[LOBBY DEBUG] Queued garbage for game: {msg.garbage} lines"
+                            )
+                        except Exception as e:
+                            print(f"[LOBBY DEBUG] Error queueing garbage: {e}")
+                    else:
+                        print(
+                            f"[LOBBY DEBUG] Ignored own GARBAGE message: {msg.garbage} lines"
+                        )
             except queue.Empty:
                 pass
             except Exception as e:
@@ -253,14 +273,20 @@ def main(listen_port, peer_addrs):
 
         class NetQueueAdapter(queue.Queue):
             def get_nowait(self):
-                _, msg = net.incoming.get_nowait()
-                return msg
+                try:
+                    # First check for game messages (GARBAGE, etc)
+                    return game_message_queue.get_nowait()
+                except queue.Empty:
+                    # If no game messages, get from network
+                    _, msg = net.incoming.get_nowait()
+                    return msg
 
         class PeerSocket:
             def sendall(self, data: bytes):
                 s = data.decode().strip()
                 if s.startswith("GARBAGE:"):
                     n = int(s.split(":", 1)[1])
+                    print(f"[PEER SOCKET DEBUG] Game sent GARBAGE message: {n} lines")
                     if n > 0:
                         net.broadcast(
                             tetris_pb2.TetrisMessage(
@@ -271,6 +297,9 @@ def main(listen_port, peer_addrs):
                                     player_name.encode() if player_name else b""
                                 ),  # Include player name for better debug messages
                             )
+                        )
+                        print(
+                            f"[PEER SOCKET DEBUG] Broadcast GARBAGE message to network: {n} lines"
                         )
                 elif s.startswith("LOSE:"):
                     sc = int(s.split(":", 1)[1])
@@ -333,7 +362,7 @@ def main(listen_port, peer_addrs):
         net.broadcast(
             tetris_pb2.TetrisMessage(
                 type=tetris_pb2.LOSE,
-                score=final_score["survival_time"],
+                score=int(final_score["survival_time"]),
                 extra=f"{final_score['attacks_sent']}:{final_score['attacks_received']}".encode(),
             )
         )

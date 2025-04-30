@@ -103,6 +103,14 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
 
     def broadcast(self, msg):
         """Broadcast a TetrisMessage to all connected peers."""
+        # Add debug logging for garbage messages
+        if hasattr(msg, "type") and msg.type == 2:  # GARBAGE type
+            print(
+                f"[P2P DEBUG] Broadcasting GARBAGE message: {msg.garbage} lines to {len(self.out_queues)} peers"
+            )
+            if hasattr(msg, "sender"):
+                print(f"[P2P DEBUG] - Sender: {msg.sender}")
+
         with self.lock:
             for addr, q in self.out_queues.items():
                 q.put(msg)
