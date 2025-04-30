@@ -116,6 +116,56 @@ def normalize_peer_address(peer_addr):
     return peer_addr.lower()
 
 
+def extract_ip(peer_id):
+    """
+    Extract the IP part from a peer_id for uniqueness checking.
+    Special handling for localhost to allow multiple local instances.
+
+    Handle various formats from gRPC:
+    - ipv4:10.0.0.1:12345
+    - ipv6:[::1]:12345
+    - localhost:12345
+    - [::]:12345 (server listener)
+    """
+    # Debug the input for troubleshooting
+    original_peer_id = peer_id
+
+    # Remove protocol prefix if present
+    if ":" in peer_id and peer_id.split(":", 1)[0] in ("ipv4", "ipv6"):
+        peer_id = peer_id.split(":", 1)[1]
+
+    # Handle special cases - for localhost, include the port for uniqueness
+    if peer_id.startswith("[::]:"):
+        result = f"localhost:{peer_id.split(':')[-1]}"
+        print(f"[DEBUG] extract_ip: {original_peer_id} -> {result} [listener]")
+        return result
+
+    if peer_id.startswith("localhost:"):
+        print(f"[DEBUG] extract_ip: {original_peer_id} -> {peer_id} [localhost]")
+        return peer_id  # Keep as is to differentiate local instances
+
+    # IPv6 addresses have multiple colons and may be wrapped in brackets
+    if "[" in peer_id and "]" in peer_id:
+        # Extract the IPv6 address inside brackets
+        ipv6_part = peer_id[peer_id.find("[") + 1 : peer_id.find("]")]
+        port = peer_id.split("]:", 1)[1] if "]:" in peer_id else "0"
+        result = f"{ipv6_part}:{port}"
+        print(f"[DEBUG] extract_ip: {original_peer_id} -> {result} [ipv6]")
+        return result
+
+    # Extract IP without port for non-localhost addresses
+    parts = peer_id.split(":")
+    if len(parts) >= 2:
+        # The IP is everything except the last part (port)
+        ip = ":".join(parts[:-1]).lower()
+        result = ip
+        print(f"[DEBUG] extract_ip: {original_peer_id} -> {result} [regular]")
+        return result
+
+    print(f"[DEBUG] extract_ip: {original_peer_id} -> {peer_id.lower()} [default]")
+    return peer_id.lower()
+
+
 def main(listen_port, peer_addrs):
     listen_addr = f"[::]:{listen_port}"
     net = P2PNetwork(listen_addr, peer_addrs)
@@ -129,6 +179,10 @@ def main(listen_port, peer_addrs):
 
     # Full list of peer addresses (including this one)
     all_addrs = sorted(set(peer_addrs))  # Use a set to deduplicate addresses
+
+    # Print all peer addresses for debugging
+    print(f"[DEBUG] Original peer addresses: {peer_addrs}")
+    print(f"[DEBUG] Deduplicated peer addresses: {all_addrs}")
 
     # The total number of expected peers (including self)
     expected_peers = len(all_addrs)
@@ -148,30 +202,6 @@ def main(listen_port, peer_addrs):
     peer_address_map = {}
     # Set to track unique IP addresses (without port) that are ready
     unique_ips = set()
-
-    # Helper function to extract IP from peer_id
-    def extract_ip(peer_id):
-        """
-        Extract the IP part from a peer_id for uniqueness checking.
-        Special handling for localhost to allow multiple local instances.
-        """
-        # Remove protocol prefix if present
-        if ":" in peer_id and peer_id.split(":", 1)[0] in ("ipv4", "ipv6"):
-            peer_id = peer_id.split(":", 1)[1]
-
-        # Handle special cases - for localhost, include the port for uniqueness
-        if peer_id.startswith("[::]:"):
-            return f"localhost:{peer_id.split(':')[-1]}"
-        if peer_id.startswith("localhost:"):
-            return peer_id  # Keep as is to differentiate local instances
-
-        # Extract IP without port for non-localhost addresses
-        parts = peer_id.split(":")
-        if len(parts) >= 2:
-            # The IP is everything except the last part (port)
-            return ":".join(parts[:-1]).lower()
-
-        return peer_id.lower()
 
     # Thread to process incoming game state messages
     def process_game_states():
@@ -316,6 +346,9 @@ def main(listen_port, peer_addrs):
         print(
             "Type 'ready' to join lobby. Game will start automatically when all peers are ready."
         )
+        print(
+            "Other commands: 'peers' to see connected peers, 'net' to see network connections, 'quit' to exit."
+        )
 
         while not game_started:
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
@@ -359,11 +392,30 @@ def main(listen_port, peer_addrs):
                         for idx, ip in enumerate(sorted(unique_ips), 1):
                             print(f"{idx}. {ip}")
                         print("=====================\n")
+                elif cmd == "net":
+                    # Show network connection details
+                    print("\n=== NETWORK CONNECTIONS ===")
+                    print(f"My listen address: {listen_addr}")
+                    print(f"All peer addresses: {all_addrs}")
+                    print(f"Total expected peers: {expected_peers}")
+
+                    print("\nActive connections:")
+                    with net.lock:
+                        print(f"Outgoing connections ({len(net.out_queues)}):")
+                        for idx, addr in enumerate(sorted(net.out_queues.keys()), 1):
+                            print(f"{idx}. {addr}")
+
+                        print(f"\nUnique peer connections ({len(net.unique_peers)}):")
+                        for idx, peer in enumerate(sorted(net.unique_peers), 1):
+                            print(f"{idx}. {peer}")
+                    print("=====================\n")
                 elif cmd == "quit":
                     print("[LOBBY] Exiting...")
                     sys.exit(0)
                 else:
-                    print("[LOBBY] Unknown command. Use 'ready', 'peers', or 'quit'.")
+                    print(
+                        "[LOBBY] Unknown command. Use 'ready', 'peers', 'net', or 'quit'."
+                    )
 
             # Check if all expected peers are ready
             with ready_lock:
