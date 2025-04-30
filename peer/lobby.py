@@ -5,18 +5,243 @@ import queue
 import time
 import threading
 import socket
+import curses
 from proto import tetris_pb2
 from peer.grpc_peer import P2PNetwork
 from tetris_game import create_piece_generator, run_game
 
+# Global debug flag
+DEBUG_MODE = False
+
+
+def show_curses_menu(
+    stdscr, listen_addr, net, ready_lock, ready_peers, unique_ips, expected_peers
+):
+    """Show a curses-based menu for the lobby"""
+    global DEBUG_MODE
+    curses.curs_set(0)  # Hide cursor
+    stdscr.clear()
+    stdscr.refresh()
+
+    # Set up colors
+    curses.start_color()
+    curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)  # Ready
+    curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)  # Peers
+    curses.init_pair(3, curses.COLOR_CYAN, curses.COLOR_BLACK)  # Net
+    curses.init_pair(4, curses.COLOR_MAGENTA, curses.COLOR_BLACK)  # Debug
+    curses.init_pair(5, curses.COLOR_RED, curses.COLOR_BLACK)  # Quit
+    curses.init_pair(6, curses.COLOR_WHITE, curses.COLOR_BLUE)  # Selected item
+
+    # Menu options
+    menu_items = ["Ready", "Peers", "Net", "Toggle Debug", "Quit"]
+    selected_row = 0
+
+    # Function to display menu
+    def draw_menu():
+        h, w = stdscr.getmaxyx()
+        stdscr.clear()
+
+        # Title
+        title = "P2P Tetris Lobby"
+        stdscr.attron(curses.A_BOLD)
+        stdscr.addstr(1, (w - len(title)) // 2, title)
+        stdscr.attroff(curses.A_BOLD)
+
+        # Status
+        with ready_lock:
+            status = f"Status: {len(unique_ips)}/{expected_peers} players ready"
+        stdscr.addstr(3, (w - len(status)) // 2, status)
+
+        # Debug status
+        debug_status = f"Debug Mode: {'ON' if DEBUG_MODE else 'OFF'}"
+        stdscr.addstr(4, (w - len(debug_status)) // 2, debug_status)
+
+        # Menu items
+        menu_y = 6
+        for idx, item in enumerate(menu_items):
+            color = idx + 1  # Match color pairs defined above
+            x = w // 2 - len(item) // 2
+            if idx == selected_row:
+                stdscr.attron(curses.color_pair(6) | curses.A_BOLD)
+                stdscr.addstr(menu_y + idx, x, item)
+                stdscr.attroff(curses.color_pair(6) | curses.A_BOLD)
+            else:
+                stdscr.attron(curses.color_pair(color))
+                stdscr.addstr(menu_y + idx, x, item)
+                stdscr.attroff(curses.color_pair(color))
+
+        # Instructions
+        instr = "Use arrow keys to navigate, Enter to select"
+        stdscr.addstr(menu_y + len(menu_items) + 2, (w - len(instr)) // 2, instr)
+
+        stdscr.refresh()
+
+    # Function to handle peers display
+    def show_peers():
+        stdscr.clear()
+        h, w = stdscr.getmaxyx()
+
+        # Title
+        title = "Peer Addresses"
+        stdscr.attron(curses.A_BOLD)
+        stdscr.addstr(1, (w - len(title)) // 2, title)
+        stdscr.attroff(curses.A_BOLD)
+
+        # Content
+        with ready_lock:
+            lines = []
+            lines.append(f"Expected peers: {expected_peers}")
+            lines.append(f"Ready peers count: {len(ready_peers)}")
+            lines.append(f"Unique IPs count: {len(unique_ips)}")
+            lines.append("")
+            lines.append("Ready peers:")
+
+            for idx, peer in enumerate(sorted(ready_peers), 1):
+                identity = net._get_peer_identity(peer)
+                lines.append(f"{idx}. {peer} (Identity: {identity})")
+
+            lines.append("")
+            lines.append("Unique IPs:")
+            for idx, ip in enumerate(sorted(unique_ips), 1):
+                lines.append(f"{idx}. {ip}")
+
+        # Display content with scrolling if needed
+        start_y = 3
+        max_lines = h - 5  # Reserve space for title and footer
+        scroll_offset = 0
+
+        # Handle scrolling
+        while True:
+            stdscr.clear()
+            stdscr.attron(curses.A_BOLD)
+            stdscr.addstr(1, (w - len(title)) // 2, title)
+            stdscr.attroff(curses.A_BOLD)
+
+            # Show content
+            for i in range(min(max_lines, len(lines) - scroll_offset)):
+                if scroll_offset + i < len(lines):
+                    try:
+                        stdscr.addstr(start_y + i, 2, lines[scroll_offset + i])
+                    except curses.error:
+                        pass  # Ignore errors if line doesn't fit
+
+            # Footer
+            footer = "↑↓: Scroll | q: Back to menu"
+            try:
+                stdscr.addstr(h - 2, (w - len(footer)) // 2, footer)
+            except curses.error:
+                pass
+
+            stdscr.refresh()
+
+            # Get user input
+            key = stdscr.getch()
+            if key == ord("q"):
+                break
+            elif key == curses.KEY_UP and scroll_offset > 0:
+                scroll_offset -= 1
+            elif key == curses.KEY_DOWN and scroll_offset < len(lines) - max_lines:
+                scroll_offset += 1
+
+    # Function to show network details
+    def show_network():
+        stdscr.clear()
+        h, w = stdscr.getmaxyx()
+
+        # Title
+        title = "Network Connections"
+        stdscr.attron(curses.A_BOLD)
+        stdscr.addstr(1, (w - len(title)) // 2, title)
+        stdscr.attroff(curses.A_BOLD)
+
+        # Content
+        lines = []
+        lines.append(f"My listen address: {listen_addr}")
+        lines.append(f"Total expected peers: {expected_peers}")
+        lines.append("")
+
+        with net.lock:
+            lines.append(f"Outgoing connections ({len(net.out_queues)}):")
+            for idx, addr in enumerate(sorted(net.out_queues.keys()), 1):
+                lines.append(f"{idx}. {addr}")
+
+            lines.append("")
+            lines.append(f"Unique peer connections ({len(net.unique_peers)}):")
+            for idx, peer in enumerate(sorted(net.unique_peers), 1):
+                lines.append(f"{idx}. {peer}")
+
+        # Display content with scrolling if needed
+        start_y = 3
+        max_lines = h - 5  # Reserve space for title and footer
+        scroll_offset = 0
+
+        # Handle scrolling
+        while True:
+            stdscr.clear()
+            stdscr.attron(curses.A_BOLD)
+            stdscr.addstr(1, (w - len(title)) // 2, title)
+            stdscr.attroff(curses.A_BOLD)
+
+            # Show content
+            for i in range(min(max_lines, len(lines) - scroll_offset)):
+                if scroll_offset + i < len(lines):
+                    try:
+                        stdscr.addstr(start_y + i, 2, lines[scroll_offset + i])
+                    except curses.error:
+                        pass
+
+            # Footer
+            footer = "↑↓: Scroll | q: Back to menu"
+            try:
+                stdscr.addstr(h - 2, (w - len(footer)) // 2, footer)
+            except curses.error:
+                pass
+
+            stdscr.refresh()
+
+            # Get user input
+            key = stdscr.getch()
+            if key == ord("q"):
+                break
+            elif key == curses.KEY_UP and scroll_offset > 0:
+                scroll_offset -= 1
+            elif key == curses.KEY_DOWN and scroll_offset < len(lines) - max_lines:
+                scroll_offset += 1
+
+    # Main menu loop
+    action = None
+    while action != "quit":
+        draw_menu()
+        key = stdscr.getch()
+
+        if key == curses.KEY_UP and selected_row > 0:
+            selected_row -= 1
+        elif key == curses.KEY_DOWN and selected_row < len(menu_items) - 1:
+            selected_row += 1
+        elif key == curses.KEY_ENTER or key in [10, 13]:  # Enter key
+            if selected_row == 0:  # Ready
+                action = "ready"
+                break
+            elif selected_row == 1:  # Peers
+                show_peers()
+            elif selected_row == 2:  # Net
+                show_network()
+            elif selected_row == 3:  # Toggle Debug
+                DEBUG_MODE = not DEBUG_MODE
+            elif selected_row == 4:  # Quit
+                action = "quit"
+                break
+
+    # Clean up
+    curses.endwin()
+    return action
+
 
 def generate_random_name():
-    """Generate a random player name"""
-    adjectives = [
+    """Generate a random player name limited to 12 characters"""
+    short_adjectives = [
         "Cool",
         "Swift",
-        "Mighty",
-        "Quick",
         "Brave",
         "Agile",
         "Epic",
@@ -32,41 +257,52 @@ def generate_random_name():
         "Pixel",
         "Cyber",
         "Retro",
-        "Hyper",
         "Ultra",
         "Mega",
         "Alpha",
         "Beta",
+        "Pro",
+        "Ace",
+        "Top",
     ]
 
-    nouns = [
+    short_nouns = [
         "Player",
         "Master",
         "Knight",
-        "Falcon",
         "Tiger",
-        "Dragon",
-        "Eagle",
         "Wolf",
-        "Wizard",
-        "Hunter",
         "Ninja",
         "Gamer",
         "Hero",
-        "Legend",
-        "Warrior",
-        "Commander",
-        "Captain",
-        "Pilot",
-        "Ranger",
         "Titan",
-        "Phoenix",
         "Cobra",
         "Viper",
-        "Monarch",
+        "Ace",
+        "Hawk",
+        "Fox",
+        "Pilot",
+        "Owl",
+        "Bear",
+        "Lynx",
+        "Bot",
+        "Star",
+        "Chief",
+        "Lion",
+        "Shark",
+        "Rex",
     ]
 
-    return f"{random.choice(adjectives)}{random.choice(nouns)}"
+    adjective = random.choice(short_adjectives)
+    noun = random.choice(short_nouns)
+
+    # Make sure the combination doesn't exceed 12 characters
+    while len(adjective + noun) > 12:
+        # Try again with potentially shorter words
+        adjective = random.choice(short_adjectives)
+        noun = random.choice(short_nouns)
+
+    return f"{adjective}{noun}"
 
 
 def flatten_board(board):
@@ -202,10 +438,12 @@ def main(listen_port, peer_addrs):
                         # Use sender's self-reported listen address
                         sender_addr = msg.sender  # Added to protobuf
                         normalized_peer = net._normalize_peer_addr(sender_addr)
-                        
+
                         if normalized_peer not in unique_ips:
                             unique_ips.add(normalized_peer)
-                            print(f"[LOBBY] {normalized_peer} READY ({len(unique_ips)}/{expected_peers})")
+                            print(
+                                f"[LOBBY] {normalized_peer} READY ({len(unique_ips)}/{expected_peers})"
+                            )
                 elif msg.type == tetris_pb2.START:
                     seed = msg.seed
                     print(f"[LOBBY] Received START, seed = {seed}")
@@ -296,93 +534,49 @@ def main(listen_port, peer_addrs):
         with peer_boards_lock:
             peer_boards.clear()
 
-        print(
-            "Type 'ready' to join lobby. Game will start automatically when all peers are ready."
-        )
-        print(
-            "Other commands: 'peers' to see connected peers, 'net' to see network connections, 'quit' to exit."
+        print("Starting lobby menu. Use arrow keys to navigate.")
+
+        # Show menu and get action
+        action = curses.wrapper(
+            show_curses_menu,
+            listen_addr,
+            net,
+            ready_lock,
+            ready_peers,
+            unique_ips,
+            expected_peers,
         )
 
+        # Process menu action
+        if action == "quit":
+            print("[LOBBY] Exiting...")
+            sys.exit(0)
+        elif action == "ready":
+            # Send ready message
+            net.broadcast(
+                tetris_pb2.TetrisMessage(type=tetris_pb2.READY, sender=listen_addr)
+            )
+
+            with ready_lock:
+                # Get our own identity
+                self_identity = net._get_peer_identity(listen_addr)
+
+                # Check if we're already registered
+                is_duplicate = False
+                for existing_peer in ready_peers:
+                    if net._get_peer_identity(existing_peer) == self_identity:
+                        is_duplicate = True
+                        print(f"[LOBBY DEBUG] You are already marked as READY")
+                        break
+
+                if not is_duplicate:
+                    ready_peers.add(listen_addr)
+                    unique_ips.add(self_identity)
+                    print(f"[LOBBY] You are READY ({len(unique_ips)}/{expected_peers})")
+
+        # Loop and wait for game to start
+        print("Waiting for all players to be ready...")
         while not game_started:
-            if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-                cmd = sys.stdin.readline().strip().lower()
-                if cmd == "ready":
-                    net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.READY, sender=listen_addr))
-                    with ready_lock:
-                        # Get our own identity
-                        self_identity = net._get_peer_identity(listen_addr)
-
-                        # Check if we're already registered
-                        is_duplicate = False
-                        for existing_peer in ready_peers:
-                            if net._get_peer_identity(existing_peer) == self_identity:
-                                is_duplicate = True
-                                print(f"[LOBBY DEBUG] You are already marked as READY")
-                                break
-
-                        if not is_duplicate:
-                            ready_peers.add(listen_addr)
-                            unique_ips.add(self_identity)
-                            print(
-                                f"[LOBBY] You are READY ({len(unique_ips)}/{expected_peers})"
-                            )
-                elif cmd == "peers":
-                    # Print all peers that are ready and their normalized addresses
-                    with ready_lock:
-                        print("\n=== PEER ADDRESSES ===")
-                        print(f"Expected peers: {expected_peers}")
-                        print(f"Ready peers count: {len(ready_peers)}")
-                        print(f"Unique IPs count: {len(unique_ips)}")
-
-                        print("\nPeer Identity Mapping:")
-                        peer_identities = {}
-                        for peer in ready_peers:
-                            identity = net._get_peer_identity(peer)
-                            if identity not in peer_identities:
-                                peer_identities[identity] = []
-                            peer_identities[identity].append(peer)
-
-                        for idx, (identity, peers) in enumerate(
-                            sorted(peer_identities.items()), 1
-                        ):
-                            print(f"{idx}. {identity} -> {len(peers)} connection(s):")
-                            for p in peers:
-                                print(f"   - {p}")
-
-                        print("\nReady peers (Original addresses):")
-                        for idx, peer in enumerate(sorted(ready_peers), 1):
-                            identity = net._get_peer_identity(peer)
-                            print(f"{idx}. {peer} (Identity: {identity})")
-
-                        print("\nUnique IPs:")
-                        for idx, ip in enumerate(sorted(unique_ips), 1):
-                            print(f"{idx}. {ip}")
-                        print("=====================\n")
-                elif cmd == "net":
-                    # Show network connection details
-                    print("\n=== NETWORK CONNECTIONS ===")
-                    print(f"My listen address: {listen_addr}")
-                    print(f"All peer addresses: {all_addrs}")
-                    print(f"Total expected peers: {expected_peers}")
-
-                    print("\nActive connections:")
-                    with net.lock:
-                        print(f"Outgoing connections ({len(net.out_queues)}):")
-                        for idx, addr in enumerate(sorted(net.out_queues.keys()), 1):
-                            print(f"{idx}. {addr}")
-
-                        print(f"\nUnique peer connections ({len(net.unique_peers)}):")
-                        for idx, peer in enumerate(sorted(net.unique_peers), 1):
-                            print(f"{idx}. {peer}")
-                    print("=====================\n")
-                elif cmd == "quit":
-                    print("[LOBBY] Exiting...")
-                    sys.exit(0)
-                else:
-                    print(
-                        "[LOBBY] Unknown command. Use 'ready', 'peers', 'net', or 'quit'."
-                    )
-
             # Check if all expected peers are ready
             with ready_lock:
                 if not game_started and len(unique_ips) >= expected_peers:
@@ -422,7 +616,9 @@ def main(listen_port, peer_addrs):
                 s = data.decode().strip()
                 if s.startswith("GARBAGE:"):
                     n = int(s.split(":", 1)[1])
-                    print(f"[PEER SOCKET DEBUG] Targeting {target_addr} with {n} garbage lines")
+                    print(
+                        f"[PEER SOCKET DEBUG] Targeting {target_addr} with {n} garbage lines"
+                    )
                     net.send(
                         target_addr,
                         tetris_pb2.TetrisMessage(
@@ -432,6 +628,7 @@ def main(listen_port, peer_addrs):
                             extra=(player_name.encode() if player_name else b""),
                         ),
                     )
+
             def sendall(self, data: bytes):
                 s = data.decode().strip()
                 if s.startswith("GARBAGE:"):
@@ -504,6 +701,7 @@ def main(listen_port, peer_addrs):
             peer_boards,
             peer_boards_lock,
             player_name,
+            DEBUG_MODE,  # Pass debug mode flag to the game
         )
         print(
             f"[RESULTS] Your stats: Survival Time = {final_score['survival_time']:.1f}s, Attacks: {final_score['attacks_sent']}→, {final_score['attacks_received']}←"
