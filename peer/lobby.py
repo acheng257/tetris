@@ -95,7 +95,11 @@ def main(listen_port, peer_addrs):
     hostname = socket.gethostname()
 
     # Full list of peer addresses (including this one)
-    all_addrs = sorted(peer_addrs)
+    all_addrs = sorted(set(peer_addrs))  # Use a set to deduplicate addresses
+
+    # The total number of expected peers (including self)
+    expected_peers = len(all_addrs)
+    print(f"[LOBBY] Expecting {expected_peers} total peers")
 
     # Dictionary to store the current board state of all peers
     peer_boards = {}
@@ -103,6 +107,10 @@ def main(listen_port, peer_addrs):
 
     # Queue for forwarding GARBAGE messages to the game
     game_message_queue = queue.Queue()
+
+    # Track unique peers that are ready
+    ready_peers = set()
+    ready_lock = threading.Lock()
 
     # Thread to process incoming game state messages
     def process_game_states():
@@ -135,8 +143,34 @@ def main(listen_port, peer_addrs):
 
                         peer_boards[peer_id] = board_state
                 elif msg.type == tetris_pb2.READY:
-                    ready.add(peer_id)
-                    print(f"[LOBBY] {peer_id} READY ({len(ready)}/{len(all_addrs)})")
+                    with ready_lock:
+                        # Convert IP format for consistent comparison (handles both ipv4: and ipv6: prefixes)
+                        normalized_peer_id = peer_id
+                        # If it has a prefix like 'ipv4:' or 'ipv6:', extract just the address part
+                        if ":" in peer_id and peer_id.split(":", 1)[0] in (
+                            "ipv4",
+                            "ipv6",
+                        ):
+                            normalized_peer_id = peer_id.split(":", 1)[1]
+
+                        # Check for duplicates in multiple forms
+                        is_duplicate = False
+                        for existing_peer in ready_peers:
+                            if (
+                                normalized_peer_id in existing_peer
+                                or existing_peer in normalized_peer_id
+                            ):
+                                print(
+                                    f"[LOBBY DEBUG] Ignoring duplicate READY from {peer_id} (matches {existing_peer})"
+                                )
+                                is_duplicate = True
+                                break
+
+                        if not is_duplicate:
+                            ready_peers.add(peer_id)
+                            print(
+                                f"[LOBBY] {peer_id} READY ({len(ready_peers)}/{expected_peers})"
+                            )
                 elif msg.type == tetris_pb2.START:
                     seed = msg.seed
                     print(f"[LOBBY] Received START, seed = {seed}")
@@ -209,7 +243,8 @@ def main(listen_port, peer_addrs):
 
     while True:
         # Reset state each round
-        ready = set()
+        with ready_lock:
+            ready_peers.clear()
         game_started = False
         game_started_event = threading.Event()
         seed = None
@@ -227,25 +262,29 @@ def main(listen_port, peer_addrs):
                 cmd = sys.stdin.readline().strip().lower()
                 if cmd == "ready":
                     net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.READY))
-                    ready.add(listen_addr)
-                    print(f"[LOBBY] You are READY ({len(ready)}/{len(all_addrs)})")
+                    with ready_lock:
+                        ready_peers.add(listen_addr)
+                        print(
+                            f"[LOBBY] You are READY ({len(ready_peers)}/{expected_peers})"
+                        )
                 elif cmd == "start":
                     leader = min(all_addrs)
                     if listen_addr == leader or f"localhost:{listen_port}" == leader:
-                        if len(ready) == len(all_addrs):
-                            seed = random.randint(0, 1_000_000)
-                            net.broadcast(
-                                tetris_pb2.TetrisMessage(
-                                    type=tetris_pb2.START, seed=seed
+                        with ready_lock:
+                            if len(ready_peers) >= expected_peers:
+                                seed = random.randint(0, 1_000_000)
+                                net.broadcast(
+                                    tetris_pb2.TetrisMessage(
+                                        type=tetris_pb2.START, seed=seed
+                                    )
                                 )
-                            )
-                            game_started = True
-                            game_started_event.set()
-                            print(f"[LOBBY] You (leader) START, seed = {seed}")
-                        else:
-                            print(
-                                f"[LOBBY] Cannot start: waiting for {len(all_addrs) - len(ready)} more players to be ready"
-                            )
+                                game_started = True
+                                game_started_event.set()
+                                print(f"[LOBBY] You (leader) START, seed = {seed}")
+                            else:
+                                print(
+                                    f"[LOBBY] Cannot start: waiting for {expected_peers - len(ready_peers)} more players to be ready"
+                                )
                     else:
                         print(f"[LOBBY] Only leader ({leader}) can START")
                 elif cmd == "quit":
@@ -254,16 +293,17 @@ def main(listen_port, peer_addrs):
                 else:
                     print("[LOBBY] Unknown command. Use 'ready', 'start', or 'quit'.")
 
-            if not game_started and len(ready) == len(all_addrs):
-                leader = min(all_addrs)
-                if listen_addr == leader or f"localhost:{listen_port}" == leader:
-                    seed = random.randint(0, 1000000)
-                    net.broadcast(
-                        tetris_pb2.TetrisMessage(type=tetris_pb2.START, seed=seed)
-                    )
-                    game_started = True
-                    game_started_event.set()
-                    print(f"[LOBBY] All ready. Leader auto START, seed = {seed}")
+            with ready_lock:
+                if not game_started and len(ready_peers) >= expected_peers:
+                    leader = min(all_addrs)
+                    if listen_addr == leader or f"localhost:{listen_port}" == leader:
+                        seed = random.randint(0, 1000000)
+                        net.broadcast(
+                            tetris_pb2.TetrisMessage(type=tetris_pb2.START, seed=seed)
+                        )
+                        game_started = True
+                        game_started_event.set()
+                        print(f"[LOBBY] All ready. Leader auto START, seed = {seed}")
 
             # Wait for game start or check again in a short time
             game_started = game_started_event.wait(0.1)

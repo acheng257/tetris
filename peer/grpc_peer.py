@@ -18,6 +18,10 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         # Outgoing queues for each peer (address -> Queue)
         self.out_queues = {}
         self.lock = threading.RLock()
+        # Track unique peer connections to avoid duplicates
+        self.unique_peers = set()
+        # My listening address
+        self.listen_addr = listen_addr
 
         try:
             _, port_str = listen_addr.rsplit(":", 1)
@@ -31,21 +35,45 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         self.server.start()
         print(f"[DEBUG] P2P server listening on {listen_addr}")
 
-        for addr in peer_addrs:
+        # Make a copy of peer_addrs to avoid modification during iteration
+        for addr in list(peer_addrs):
             try:
                 host, port_s = addr.rsplit(":", 1)
                 port = int(port_s)
             except Exception:
                 host, port = addr, None
 
-            if (
-                self.listen_port is not None
-                and port == self.listen_port
-                and host in ("localhost", "127.0.0.1", "::1", "[::1]")
-            ):
+            # Skip self-connections with more robust checks
+            if self._is_self_addr(addr, host, port):
                 print(f"[DEBUG] Skipping dial to self at {addr}")
                 continue
 
+            # Try to connect to this peer
+            self._connect_to_peer(addr)
+
+    def _is_self_addr(self, addr, host, port):
+        """More robust check for self-connections"""
+        if self.listen_port is not None and port == self.listen_port:
+            # Check various localhost representations
+            if host in ("localhost", "127.0.0.1", "::1", "[::1]"):
+                return True
+
+            # Check if the host is our own IP (used when connecting from another machine)
+            try:
+                if host == self.listen_addr.split(":")[0]:
+                    return True
+            except Exception:
+                pass
+
+        # Direct comparison with listen_addr
+        if addr == self.listen_addr:
+            return True
+
+        return False
+
+    def _connect_to_peer(self, addr):
+        """Connect to a peer at the given address"""
+        try:
             q = queue.Queue()
             self.out_queues[addr] = q
             channel = grpc.insecure_channel(addr)
@@ -64,6 +92,10 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
                 target=self._recv_thread, args=(addr, response_iter), daemon=True
             ).start()
             print(f"[DEBUG] Connected to peer stub at {addr}")
+        except Exception as e:
+            print(f"[ERROR] Failed to connect to peer {addr}: {e}")
+            if addr in self.out_queues:
+                del self.out_queues[addr]
 
     def _recv_thread(self, addr, response_iter):
         """Receive messages from stub.Play() and enqueue them."""
@@ -75,13 +107,26 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
                 self.incoming.put((addr, msg))
         except Exception as e:
             print(f"[ERROR] _recv_thread for {addr} crashed: {e}")
+            # Remove from out_queues if the connection is broken
+            with self.lock:
+                if addr in self.out_queues:
+                    del self.out_queues[addr]
 
     # gRPC service handler: peers call this on our server
     def Play(self, request_iterator, context):
         peer_id = context.peer()
-        q = queue.Queue()
+
+        # Check if we already have a connection from this peer
         with self.lock:
+            if peer_id in self.unique_peers:
+                print(f"[DEBUG] Duplicate connection from {peer_id}, rejecting")
+                context.abort(grpc.StatusCode.ALREADY_EXISTS, "Duplicate connection")
+                return
+
+            self.unique_peers.add(peer_id)
+            q = queue.Queue()
             self.out_queues[peer_id] = q
+
         print(f"[DEBUG] Peer {peer_id} connected inbound")
 
         def reader():
@@ -93,13 +138,29 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
                     self.incoming.put((peer_id, msg))
             except Exception as e:
                 print(f"[ERROR] inbound reader for {peer_id} crashed: {e}")
+            finally:
+                # Clean up when connection ends
+                with self.lock:
+                    if peer_id in self.unique_peers:
+                        self.unique_peers.remove(peer_id)
+                    if peer_id in self.out_queues:
+                        del self.out_queues[peer_id]
 
         threading.Thread(target=reader, daemon=True).start()
 
         # Stream outbound messages to this peer
-        while True:
-            msg = q.get()
-            yield msg
+        try:
+            while True:
+                msg = q.get()
+                yield msg
+        except Exception as e:
+            print(f"[ERROR] outbound stream to {peer_id} failed: {e}")
+            # Clean up if the stream fails
+            with self.lock:
+                if peer_id in self.unique_peers:
+                    self.unique_peers.remove(peer_id)
+                if peer_id in self.out_queues:
+                    del self.out_queues[peer_id]
 
     def broadcast(self, msg):
         """Broadcast a TetrisMessage to all connected peers."""
