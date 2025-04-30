@@ -1028,15 +1028,23 @@ def run_game(
                         garbage_count = combo_system.get_garbage_count()
                         if client_socket and garbage_count > 0:
                             try:
-                                print(
-                                    f"[GARBAGE SEND DEBUG] Attempting to send {garbage_count} garbage lines."
-                                )
-                                client_socket.sendall(
-                                    f"GARBAGE:{garbage_count}\n".encode()
-                                )
-                                attacks_sent += garbage_count
-                            except Exception:
-                                pass
+                                with peer_boards_lock:
+                                    if peer_boards:
+                                        # Find peer with lowest score (worst performer)
+                                        worst_peer_id, worst_peer_data = min(
+                                            peer_boards.items(), 
+                                            key=lambda item: item[1]['score']
+                                        )
+                                        print(f"[STRATEGY] Targeting worst player {worst_peer_id} "
+                                            f"(score: {worst_peer_data['score']})")
+                                        
+                                        client_socket.send(
+                                            worst_peer_id,
+                                            f"GARBAGE:{garbage_count}\n".encode()
+                                        )
+                                        attacks_sent += garbage_count
+                            except Exception as e:
+                                print(f"[ERROR] Failed to target worst player: {e}")
 
                     garbage_sent = True
 
@@ -1163,16 +1171,13 @@ def run_game(
                         # Send garbage to opponents if combo is active
                         garbage_count = combo_system.get_garbage_count()
                         if client_socket and garbage_count > 0:
-                            try:
-                                print(
-                                    f"[GARBAGE SEND DEBUG] Attempting to send {garbage_count} garbage lines (hard drop)."
-                                )
-                                client_socket.sendall(
-                                    f"GARBAGE:{garbage_count}\n".encode()
-                                )
-                                attacks_sent += garbage_count
-                            except Exception:
-                                pass
+                            with peer_boards_lock:
+                                if peer_boards:
+                                    worst_peer = min(peer_boards.items(), 
+                                                key=lambda item: item[1]['score'])[0]
+                                    client_socket.send(worst_peer,  # Use send with target
+                                                    f"GARBAGE:{garbage_count}\n".encode())
+                                    attacks_sent += garbage_count
 
                     score += calculate_score(lines, level)
                     lines_cleared_total += lines

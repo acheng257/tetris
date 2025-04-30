@@ -253,6 +253,16 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
             for addr, q in self.out_queues.items():
                 q.put(msg)
 
+    def send(self, target_addr, msg):
+        """Send a message to a specific peer"""
+        with self.lock:
+            if target_addr in self.out_queues:
+                if hasattr(msg, "type") and msg.type == tetris_pb2.GARBAGE:
+                    print(f"[P2P DEBUG] Sending GARBAGE to {target_addr}: {msg.garbage} lines")
+                self.out_queues[target_addr].put(msg)
+            else:
+                print(f"[ERROR] No connection to {target_addr}")
+
     def _normalize_peer_addr(self, addr):
         """Normalize a peer address to a standard format to help with deduplication"""
         try:
@@ -280,13 +290,9 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
             return addr
 
     def _get_peer_identity(self, addr):
-        """Extract a unique identity for a peer that doesn't change with reconnections"""
+        """Extract a unique identity including port"""
         norm_addr = self._normalize_peer_addr(addr)
-        try:
-            host, port = norm_addr.rsplit(":", 1)
-            return host.lower()  # Just the host part as identity
-        except:
-            return norm_addr
+        return norm_addr.lower()  # Keep host:port as identity
 
     def _is_duplicate_connection(self, peer_id):
         """Check if we already have a connection to this peer's identity"""

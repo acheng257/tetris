@@ -168,6 +168,8 @@ def main(listen_port, peer_addrs):
     # Thread to process incoming game state messages
     def process_game_states():
         nonlocal seed
+        nonlocal scores
+        scores = {}
         while True:
             try:
                 peer_id, msg = net.incoming.get(timeout=0.1)
@@ -297,6 +299,7 @@ def main(listen_port, peer_addrs):
             unique_ips.clear()
 
         game_started = False
+        scores = {}
         game_started_event = threading.Event()
         seed = None
         results_received = False
@@ -428,6 +431,20 @@ def main(listen_port, peer_addrs):
                     return msg
 
         class PeerSocket:
+            def send(self, target_addr, data: bytes):
+                s = data.decode().strip()
+                if s.startswith("GARBAGE:"):
+                    n = int(s.split(":", 1)[1])
+                    print(f"[PEER SOCKET DEBUG] Targeting {target_addr} with {n} garbage lines")
+                    net.send(
+                        target_addr,
+                        tetris_pb2.TetrisMessage(
+                            type=tetris_pb2.GARBAGE,
+                            garbage=n,
+                            sender=listen_addr,
+                            extra=(player_name.encode() if player_name else b""),
+                        ),
+                    )
             def sendall(self, data: bytes):
                 s = data.decode().strip()
                 if s.startswith("GARBAGE:"):
