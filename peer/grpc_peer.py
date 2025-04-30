@@ -22,12 +22,21 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         self.unique_peers = set()
         # My listening address
         self.listen_addr = listen_addr
+        # My IP addresses (for self-connection detection)
+        self.my_ips = self._get_my_ip_addresses()
+        # Track persistent peers that should be reconnected if they drop
+        self.persistent_peers = set()
+        # Reconnection timers
+        self.reconnect_timers = {}
 
         try:
             _, port_str = listen_addr.rsplit(":", 1)
             self.listen_port = int(port_str)
         except Exception:
             self.listen_port = None
+
+        print(f"[DEBUG] My IP addresses: {self.my_ips}")
+        print(f"[DEBUG] My listen port: {self.listen_port}")
 
         self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
         tetris_pb2_grpc.add_TetrisServiceServicer_to_server(self, self.server)
@@ -48,22 +57,56 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
                 print(f"[DEBUG] Skipping dial to self at {addr}")
                 continue
 
+            # Add to persistent peers list for reconnection
+            self.persistent_peers.add(addr)
+
             # Try to connect to this peer
             self._connect_to_peer(addr)
 
+    def _get_my_ip_addresses(self):
+        """Get all IP addresses of this machine for better self-connection detection"""
+        import socket
+
+        my_ips = set(["localhost", "127.0.0.1", "::", "::1", "[::1]", "[::])"])
+
+        try:
+            # Get hostname and local IPs
+            hostname = socket.gethostname()
+            my_ips.add(hostname)
+
+            # Get all local IP addresses
+            for ip in socket.gethostbyname_ex(hostname)[2]:
+                my_ips.add(ip)
+
+            # Try to get the external IP if possible
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))  # Google's DNS server
+                my_ips.add(s.getsockname()[0])
+                s.close()
+            except:
+                pass
+
+        except Exception as e:
+            print(f"[ERROR] Failed to get IP addresses: {e}")
+
+        return my_ips
+
     def _is_self_addr(self, addr, host, port):
         """More robust check for self-connections"""
-        if self.listen_port is not None and port == self.listen_port:
-            # Check various localhost representations
-            if host in ("localhost", "127.0.0.1", "::1", "[::1]"):
+        # Clean up the host to handle various formats
+        clean_host = host
+        if host.startswith("[") and host.endswith("]"):
+            clean_host = host[1:-1]
+
+        # Check if it matches any of our IPs
+        if clean_host in self.my_ips:
+            if self.listen_port is not None and port == self.listen_port:
                 return True
 
-            # Check if the host is our own IP (used when connecting from another machine)
-            try:
-                if host == self.listen_addr.split(":")[0]:
-                    return True
-            except Exception:
-                pass
+        # If matching the listen port but on any interface
+        if port == self.listen_port and (clean_host in ["0.0.0.0", "::", "*"]):
+            return True
 
         # Direct comparison with listen_addr
         if addr == self.listen_addr:
@@ -74,6 +117,15 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
     def _connect_to_peer(self, addr):
         """Connect to a peer at the given address"""
         try:
+            peer_identity = self._get_peer_identity(addr)
+
+            # Check if we already have a connection to this peer
+            if self._is_duplicate_connection(addr):
+                print(
+                    f"[DEBUG] Already have a connection to peer with identity {peer_identity}, skipping {addr}"
+                )
+                return
+
             q = queue.Queue()
             self.out_queues[addr] = q
             channel = grpc.insecure_channel(addr)
@@ -91,11 +143,17 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
             threading.Thread(
                 target=self._recv_thread, args=(addr, response_iter), daemon=True
             ).start()
-            print(f"[DEBUG] Connected to peer stub at {addr}")
+            print(
+                f"[DEBUG] Connected to peer stub at {addr} (identity: {peer_identity})"
+            )
         except Exception as e:
             print(f"[ERROR] Failed to connect to peer {addr}: {e}")
             if addr in self.out_queues:
                 del self.out_queues[addr]
+
+            # Try again later if this is an important peer
+            if addr in self.persistent_peers:
+                self._schedule_reconnect(addr)
 
     def _recv_thread(self, addr, response_iter):
         """Receive messages from stub.Play() and enqueue them."""
@@ -111,15 +169,30 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
             with self.lock:
                 if addr in self.out_queues:
                     del self.out_queues[addr]
+                # Remove from unique_peers if it was there
+                peer_identity = self._get_peer_identity(addr)
+                for peer in list(self.unique_peers):
+                    if self._get_peer_identity(peer) == peer_identity:
+                        self.unique_peers.remove(peer)
+                        print(
+                            f"[DEBUG] Removed {peer} from unique_peers due to connection failure"
+                        )
+
+            # Try to reconnect if this is a persistent peer
+            if addr in self.persistent_peers:
+                self._schedule_reconnect(addr)
 
     # gRPC service handler: peers call this on our server
     def Play(self, request_iterator, context):
         peer_id = context.peer()
+        peer_identity = self._get_peer_identity(peer_id)
 
         # Check if we already have a connection from this peer
         with self.lock:
-            if peer_id in self.unique_peers:
-                print(f"[DEBUG] Duplicate connection from {peer_id}, rejecting")
+            if self._is_duplicate_connection(peer_id):
+                print(
+                    f"[DEBUG] Duplicate connection from {peer_id} (identity: {peer_identity}), rejecting"
+                )
                 context.abort(grpc.StatusCode.ALREADY_EXISTS, "Duplicate connection")
                 return
 
@@ -127,7 +200,7 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
             q = queue.Queue()
             self.out_queues[peer_id] = q
 
-        print(f"[DEBUG] Peer {peer_id} connected inbound")
+        print(f"[DEBUG] Peer {peer_id} connected inbound (identity: {peer_identity})")
 
         def reader():
             try:
@@ -145,6 +218,10 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
                         self.unique_peers.remove(peer_id)
                     if peer_id in self.out_queues:
                         del self.out_queues[peer_id]
+
+                    print(
+                        f"[DEBUG] Peer {peer_id} disconnected (identity: {peer_identity})"
+                    )
 
         threading.Thread(target=reader, daemon=True).start()
 
@@ -175,3 +252,70 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         with self.lock:
             for addr, q in self.out_queues.items():
                 q.put(msg)
+
+    def _normalize_peer_addr(self, addr):
+        """Normalize a peer address to a standard format to help with deduplication"""
+        try:
+            # Handle gRPC prefixes
+            if addr.startswith("ipv4:") or addr.startswith("ipv6:"):
+                addr = addr.split(":", 1)[1]
+
+            # Extract host and port
+            if addr.startswith("[") and "]:" in addr:
+                # IPv6 address in brackets
+                host = addr[: addr.find("]") + 1]
+                port = addr.split("]:", 1)[1]
+            else:
+                # IPv4 address or hostname
+                host, port = addr.rsplit(":", 1)
+
+            # Clean up IPv6 brackets if present
+            if host.startswith("[") and host.endswith("]"):
+                host = host[1:-1]
+
+            # Return standardized format
+            return f"{host.lower()}:{port}"
+        except Exception as e:
+            print(f"[ERROR] Failed to normalize peer address {addr}: {e}")
+            return addr
+
+    def _get_peer_identity(self, addr):
+        """Extract a unique identity for a peer that doesn't change with reconnections"""
+        norm_addr = self._normalize_peer_addr(addr)
+        try:
+            host, port = norm_addr.rsplit(":", 1)
+            return host.lower()  # Just the host part as identity
+        except:
+            return norm_addr
+
+    def _is_duplicate_connection(self, peer_id):
+        """Check if we already have a connection to this peer's identity"""
+        peer_identity = self._get_peer_identity(peer_id)
+
+        with self.lock:
+            # Check all existing connections
+            for existing in self.unique_peers:
+                if peer_identity == self._get_peer_identity(existing):
+                    return True
+
+        return False
+
+    def _schedule_reconnect(self, addr, delay=5):
+        """Schedule a reconnection attempt to a peer after a delay"""
+        # Cancel any existing timer
+        if addr in self.reconnect_timers:
+            self.reconnect_timers[addr].cancel()
+
+        def reconnect_task():
+            print(f"[DEBUG] Attempting to reconnect to {addr}")
+            self._connect_to_peer(addr)
+            # Remove from timers if successful (otherwise it will be rescheduled)
+            if addr in self.reconnect_timers:
+                del self.reconnect_timers[addr]
+
+        # Create a new timer
+        timer = threading.Timer(delay, reconnect_task)
+        timer.daemon = True
+        self.reconnect_timers[addr] = timer
+        timer.start()
+        print(f"[DEBUG] Scheduled reconnection to {addr} in {delay} seconds")

@@ -83,39 +83,6 @@ def unflatten_board(cells, width, height):
     return board
 
 
-def normalize_peer_address(peer_addr):
-    """
-    Normalize a peer address to a consistent format for comparison.
-    Handles various formats like 'ipv4:1.2.3.4:5000', 'localhost:5000', '1.2.3.4:5000', '[::]:5000'.
-
-    Returns a normalized string that can be used for deduplication.
-    """
-    # If it has a protocol prefix like 'ipv4:' or 'ipv6:', remove it
-    if ":" in peer_addr and peer_addr.split(":", 1)[0] in ("ipv4", "ipv6"):
-        peer_addr = peer_addr.split(":", 1)[1]
-
-    # Handle localhost by extracting just the port
-    if peer_addr.startswith("localhost:"):
-        return f"port:{peer_addr.split(':')[1]}"
-
-    # Handle the [::] IPv6 listener address - this is the local machine
-    if peer_addr.startswith("[::]:"):
-        port = peer_addr.split(":")[-1]
-        # Return a special format for the listener
-        return f"listener:{port}"
-
-    # For IP addresses, extract just the IP and port
-    parts = peer_addr.split(":")
-    if len(parts) >= 2:
-        # Get the last part as the port
-        port = parts[-1]
-        # Get the rest as the address
-        address = ":".join(parts[:-1])
-        return f"{address.lower()}:{port}"
-
-    return peer_addr.lower()
-
-
 def extract_ip(peer_id):
     """
     Extract the IP part from a peer_id for uniqueness checking.
@@ -127,42 +94,39 @@ def extract_ip(peer_id):
     - localhost:12345
     - [::]:12345 (server listener)
     """
-    # Debug the input for troubleshooting
-    original_peer_id = peer_id
+    try:
+        # Remove protocol prefix if present
+        if ":" in peer_id and peer_id.split(":", 1)[0] in ("ipv4", "ipv6"):
+            peer_id = peer_id.split(":", 1)[1]
 
-    # Remove protocol prefix if present
-    if ":" in peer_id and peer_id.split(":", 1)[0] in ("ipv4", "ipv6"):
-        peer_id = peer_id.split(":", 1)[1]
+        # Handle special cases - for localhost, include the port for uniqueness
+        if peer_id.startswith("[::]:"):
+            result = f"localhost:{peer_id.split(':')[-1]}"
+            return result
 
-    # Handle special cases - for localhost, include the port for uniqueness
-    if peer_id.startswith("[::]:"):
-        result = f"localhost:{peer_id.split(':')[-1]}"
-        print(f"[DEBUG] extract_ip: {original_peer_id} -> {result} [listener]")
-        return result
+        if peer_id.startswith("localhost:"):
+            return peer_id  # Keep as is to differentiate local instances
 
-    if peer_id.startswith("localhost:"):
-        print(f"[DEBUG] extract_ip: {original_peer_id} -> {peer_id} [localhost]")
-        return peer_id  # Keep as is to differentiate local instances
+        # IPv6 addresses have multiple colons and may be wrapped in brackets
+        if "[" in peer_id and "]" in peer_id:
+            # Extract the IPv6 address inside brackets
+            ipv6_part = peer_id[peer_id.find("[") + 1 : peer_id.find("]")]
+            # For local IPv6 addresses, treat them as localhost
+            if ipv6_part in ("::1", "::"):
+                port = peer_id.split("]:", 1)[1] if "]:" in peer_id else "0"
+                return f"localhost:{port}"
+            # Otherwise normalize the IPv6 address
+            return ipv6_part
 
-    # IPv6 addresses have multiple colons and may be wrapped in brackets
-    if "[" in peer_id and "]" in peer_id:
-        # Extract the IPv6 address inside brackets
-        ipv6_part = peer_id[peer_id.find("[") + 1 : peer_id.find("]")]
-        port = peer_id.split("]:", 1)[1] if "]:" in peer_id else "0"
-        result = f"{ipv6_part}:{port}"
-        print(f"[DEBUG] extract_ip: {original_peer_id} -> {result} [ipv6]")
-        return result
+        # Extract IP without port for non-localhost addresses
+        parts = peer_id.split(":")
+        if len(parts) >= 2:
+            # The IP is everything except the last part (port)
+            ip = ":".join(parts[:-1]).lower()
+            return ip
+    except Exception as e:
+        print(f"[LOBBY ERROR] Error extracting IP from {peer_id}: {e}")
 
-    # Extract IP without port for non-localhost addresses
-    parts = peer_id.split(":")
-    if len(parts) >= 2:
-        # The IP is everything except the last part (port)
-        ip = ":".join(parts[:-1]).lower()
-        result = ip
-        print(f"[DEBUG] extract_ip: {original_peer_id} -> {result} [regular]")
-        return result
-
-    print(f"[DEBUG] extract_ip: {original_peer_id} -> {peer_id.lower()} [default]")
     return peer_id.lower()
 
 
@@ -198,8 +162,6 @@ def main(listen_port, peer_addrs):
     # Track unique peers that are ready
     ready_peers = set()
     ready_lock = threading.Lock()
-    # Dictionary to map normalized peer addresses to their original form
-    peer_address_map = {}
     # Set to track unique IP addresses (without port) that are ready
     unique_ips = set()
 
@@ -235,22 +197,23 @@ def main(listen_port, peer_addrs):
                         peer_boards[peer_id] = board_state
                 elif msg.type == tetris_pb2.READY:
                     with ready_lock:
-                        # Normalize the peer address for comparison
-                        normalized_peer_id = normalize_peer_address(peer_id)
+                        # Get peer identity for better deduplication
+                        peer_identity = net._get_peer_identity(peer_id)
 
-                        # Extract just the IP part for uniqueness check
-                        ip = extract_ip(peer_id)
+                        # Check if this peer identity is already in our tracked set
+                        is_duplicate = False
+                        for existing_peer in ready_peers:
+                            if net._get_peer_identity(existing_peer) == peer_identity:
+                                is_duplicate = True
+                                print(
+                                    f"[LOBBY DEBUG] Ignoring duplicate READY from {peer_id} (identity {peer_identity} already registered)"
+                                )
+                                break
 
-                        # Check if this IP is already in our tracked set
-                        if ip in unique_ips:
-                            print(
-                                f"[LOBBY DEBUG] Ignoring duplicate READY from {peer_id} (IP {ip} already registered)"
-                            )
-                        else:
+                        if not is_duplicate:
                             # This is a new unique peer
-                            unique_ips.add(ip)
-                            peer_address_map[normalized_peer_id] = peer_id
                             ready_peers.add(peer_id)
+                            unique_ips.add(peer_identity)
                             print(
                                 f"[LOBBY] {peer_id} READY ({len(unique_ips)}/{expected_peers})"
                             )
@@ -331,8 +294,8 @@ def main(listen_port, peer_addrs):
         # Reset state each round
         with ready_lock:
             ready_peers.clear()
-            peer_address_map.clear()
             unique_ips.clear()
+
         game_started = False
         game_started_event = threading.Event()
         seed = None
@@ -356,20 +319,23 @@ def main(listen_port, peer_addrs):
                 if cmd == "ready":
                     net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.READY))
                     with ready_lock:
-                        # Normalize our own address
-                        normalized_addr = normalize_peer_address(listen_addr)
-                        # Extract just the IP part
-                        ip = extract_ip(listen_addr)
+                        # Get our own identity
+                        self_identity = net._get_peer_identity(listen_addr)
 
-                        if ip not in unique_ips:
-                            unique_ips.add(ip)
-                            peer_address_map[normalized_addr] = listen_addr
+                        # Check if we're already registered
+                        is_duplicate = False
+                        for existing_peer in ready_peers:
+                            if net._get_peer_identity(existing_peer) == self_identity:
+                                is_duplicate = True
+                                print(f"[LOBBY DEBUG] You are already marked as READY")
+                                break
+
+                        if not is_duplicate:
                             ready_peers.add(listen_addr)
+                            unique_ips.add(self_identity)
                             print(
                                 f"[LOBBY] You are READY ({len(unique_ips)}/{expected_peers})"
                             )
-                        else:
-                            print(f"[LOBBY DEBUG] You are already marked as READY")
                 elif cmd == "peers":
                     # Print all peers that are ready and their normalized addresses
                     with ready_lock:
@@ -378,15 +344,25 @@ def main(listen_port, peer_addrs):
                         print(f"Ready peers count: {len(ready_peers)}")
                         print(f"Unique IPs count: {len(unique_ips)}")
 
+                        print("\nPeer Identity Mapping:")
+                        peer_identities = {}
+                        for peer in ready_peers:
+                            identity = net._get_peer_identity(peer)
+                            if identity not in peer_identities:
+                                peer_identities[identity] = []
+                            peer_identities[identity].append(peer)
+
+                        for idx, (identity, peers) in enumerate(
+                            sorted(peer_identities.items()), 1
+                        ):
+                            print(f"{idx}. {identity} -> {len(peers)} connection(s):")
+                            for p in peers:
+                                print(f"   - {p}")
+
                         print("\nReady peers (Original addresses):")
                         for idx, peer in enumerate(sorted(ready_peers), 1):
-                            print(f"{idx}. {peer} (IP: {extract_ip(peer)})")
-
-                        print("\nNormalized address mapping:")
-                        for idx, (norm_addr, orig_addr) in enumerate(
-                            sorted(peer_address_map.items()), 1
-                        ):
-                            print(f"{idx}. {norm_addr} -> {orig_addr}")
+                            identity = net._get_peer_identity(peer)
+                            print(f"{idx}. {peer} (Identity: {identity})")
 
                         print("\nUnique IPs:")
                         for idx, ip in enumerate(sorted(unique_ips), 1):
