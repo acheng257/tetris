@@ -83,6 +83,39 @@ def unflatten_board(cells, width, height):
     return board
 
 
+def normalize_peer_address(peer_addr):
+    """
+    Normalize a peer address to a consistent format for comparison.
+    Handles various formats like 'ipv4:1.2.3.4:5000', 'localhost:5000', '1.2.3.4:5000', '[::]:5000'.
+
+    Returns a normalized string that can be used for deduplication.
+    """
+    # If it has a protocol prefix like 'ipv4:' or 'ipv6:', remove it
+    if ":" in peer_addr and peer_addr.split(":", 1)[0] in ("ipv4", "ipv6"):
+        peer_addr = peer_addr.split(":", 1)[1]
+
+    # Handle localhost by extracting just the port
+    if peer_addr.startswith("localhost:"):
+        return f"port:{peer_addr.split(':')[1]}"
+
+    # Handle the [::] IPv6 listener address - this is the local machine
+    if peer_addr.startswith("[::]:"):
+        port = peer_addr.split(":")[-1]
+        # Return a special format for the listener
+        return f"listener:{port}"
+
+    # For IP addresses, extract just the IP and port
+    parts = peer_addr.split(":")
+    if len(parts) >= 2:
+        # Get the last part as the port
+        port = parts[-1]
+        # Get the rest as the address
+        address = ":".join(parts[:-1])
+        return f"{address.lower()}:{port}"
+
+    return peer_addr.lower()
+
+
 def main(listen_port, peer_addrs):
     listen_addr = f"[::]:{listen_port}"
     net = P2PNetwork(listen_addr, peer_addrs)
@@ -111,6 +144,34 @@ def main(listen_port, peer_addrs):
     # Track unique peers that are ready
     ready_peers = set()
     ready_lock = threading.Lock()
+    # Dictionary to map normalized peer addresses to their original form
+    peer_address_map = {}
+    # Set to track unique IP addresses (without port) that are ready
+    unique_ips = set()
+
+    # Helper function to extract IP from peer_id
+    def extract_ip(peer_id):
+        """
+        Extract the IP part from a peer_id for uniqueness checking.
+        Special handling for localhost to allow multiple local instances.
+        """
+        # Remove protocol prefix if present
+        if ":" in peer_id and peer_id.split(":", 1)[0] in ("ipv4", "ipv6"):
+            peer_id = peer_id.split(":", 1)[1]
+
+        # Handle special cases - for localhost, include the port for uniqueness
+        if peer_id.startswith("[::]:"):
+            return f"localhost:{peer_id.split(':')[-1]}"
+        if peer_id.startswith("localhost:"):
+            return peer_id  # Keep as is to differentiate local instances
+
+        # Extract IP without port for non-localhost addresses
+        parts = peer_id.split(":")
+        if len(parts) >= 2:
+            # The IP is everything except the last part (port)
+            return ":".join(parts[:-1]).lower()
+
+        return peer_id.lower()
 
     # Thread to process incoming game state messages
     def process_game_states():
@@ -144,32 +205,24 @@ def main(listen_port, peer_addrs):
                         peer_boards[peer_id] = board_state
                 elif msg.type == tetris_pb2.READY:
                     with ready_lock:
-                        # Convert IP format for consistent comparison (handles both ipv4: and ipv6: prefixes)
-                        normalized_peer_id = peer_id
-                        # If it has a prefix like 'ipv4:' or 'ipv6:', extract just the address part
-                        if ":" in peer_id and peer_id.split(":", 1)[0] in (
-                            "ipv4",
-                            "ipv6",
-                        ):
-                            normalized_peer_id = peer_id.split(":", 1)[1]
+                        # Normalize the peer address for comparison
+                        normalized_peer_id = normalize_peer_address(peer_id)
 
-                        # Check for duplicates in multiple forms
-                        is_duplicate = False
-                        for existing_peer in ready_peers:
-                            if (
-                                normalized_peer_id in existing_peer
-                                or existing_peer in normalized_peer_id
-                            ):
-                                print(
-                                    f"[LOBBY DEBUG] Ignoring duplicate READY from {peer_id} (matches {existing_peer})"
-                                )
-                                is_duplicate = True
-                                break
+                        # Extract just the IP part for uniqueness check
+                        ip = extract_ip(peer_id)
 
-                        if not is_duplicate:
+                        # Check if this IP is already in our tracked set
+                        if ip in unique_ips:
+                            print(
+                                f"[LOBBY DEBUG] Ignoring duplicate READY from {peer_id} (IP {ip} already registered)"
+                            )
+                        else:
+                            # This is a new unique peer
+                            unique_ips.add(ip)
+                            peer_address_map[normalized_peer_id] = peer_id
                             ready_peers.add(peer_id)
                             print(
-                                f"[LOBBY] {peer_id} READY ({len(ready_peers)}/{expected_peers})"
+                                f"[LOBBY] {peer_id} READY ({len(unique_ips)}/{expected_peers})"
                             )
                 elif msg.type == tetris_pb2.START:
                     seed = msg.seed
@@ -235,7 +288,10 @@ def main(listen_port, peer_addrs):
             except queue.Empty:
                 pass
             except Exception as e:
-                print(f"Error processing messages: {e}")
+                print(f"[LOBBY ERROR] Error processing message from {peer_id}: {e}")
+                import traceback
+
+                print(f"[LOBBY ERROR] Traceback: {traceback.format_exc()}")
 
     # Start game state processing thread
     game_state_thread = threading.Thread(target=process_game_states, daemon=True)
@@ -245,6 +301,8 @@ def main(listen_port, peer_addrs):
         # Reset state each round
         with ready_lock:
             ready_peers.clear()
+            peer_address_map.clear()
+            unique_ips.clear()
         game_started = False
         game_started_event = threading.Event()
         seed = None
@@ -263,15 +321,47 @@ def main(listen_port, peer_addrs):
                 if cmd == "ready":
                     net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.READY))
                     with ready_lock:
-                        ready_peers.add(listen_addr)
-                        print(
-                            f"[LOBBY] You are READY ({len(ready_peers)}/{expected_peers})"
-                        )
+                        # Normalize our own address
+                        normalized_addr = normalize_peer_address(listen_addr)
+                        # Extract just the IP part
+                        ip = extract_ip(listen_addr)
+
+                        if ip not in unique_ips:
+                            unique_ips.add(ip)
+                            peer_address_map[normalized_addr] = listen_addr
+                            ready_peers.add(listen_addr)
+                            print(
+                                f"[LOBBY] You are READY ({len(unique_ips)}/{expected_peers})"
+                            )
+                        else:
+                            print(f"[LOBBY DEBUG] You are already marked as READY")
+                elif cmd == "peers":
+                    # Print all peers that are ready and their normalized addresses
+                    with ready_lock:
+                        print("\n=== PEER ADDRESSES ===")
+                        print(f"Expected peers: {expected_peers}")
+                        print(f"Ready peers count: {len(ready_peers)}")
+                        print(f"Unique IPs count: {len(unique_ips)}")
+
+                        print("\nReady peers (Original addresses):")
+                        for idx, peer in enumerate(sorted(ready_peers), 1):
+                            print(f"{idx}. {peer} (IP: {extract_ip(peer)})")
+
+                        print("\nNormalized address mapping:")
+                        for idx, (norm_addr, orig_addr) in enumerate(
+                            sorted(peer_address_map.items()), 1
+                        ):
+                            print(f"{idx}. {norm_addr} -> {orig_addr}")
+
+                        print("\nUnique IPs:")
+                        for idx, ip in enumerate(sorted(unique_ips), 1):
+                            print(f"{idx}. {ip}")
+                        print("=====================\n")
                 elif cmd == "start":
                     leader = min(all_addrs)
                     if listen_addr == leader or f"localhost:{listen_port}" == leader:
                         with ready_lock:
-                            if len(ready_peers) >= expected_peers:
+                            if len(unique_ips) >= expected_peers:
                                 seed = random.randint(0, 1_000_000)
                                 net.broadcast(
                                     tetris_pb2.TetrisMessage(
@@ -283,7 +373,7 @@ def main(listen_port, peer_addrs):
                                 print(f"[LOBBY] You (leader) START, seed = {seed}")
                             else:
                                 print(
-                                    f"[LOBBY] Cannot start: waiting for {expected_peers - len(ready_peers)} more players to be ready"
+                                    f"[LOBBY] Cannot start: waiting for {expected_peers - len(unique_ips)} more players to be ready"
                                 )
                     else:
                         print(f"[LOBBY] Only leader ({leader}) can START")
@@ -294,7 +384,7 @@ def main(listen_port, peer_addrs):
                     print("[LOBBY] Unknown command. Use 'ready', 'start', or 'quit'.")
 
             with ready_lock:
-                if not game_started and len(ready_peers) >= expected_peers:
+                if not game_started and len(unique_ips) >= expected_peers:
                     leader = min(all_addrs)
                     if listen_addr == leader or f"localhost:{listen_port}" == leader:
                         seed = random.randint(0, 1000000)
