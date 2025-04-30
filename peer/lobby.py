@@ -313,7 +313,9 @@ def main(listen_port, peer_addrs):
         with peer_boards_lock:
             peer_boards.clear()
 
-        print("Type 'ready' to join lobby. Once everyone is ready, leader auto-starts.")
+        print(
+            "Type 'ready' to join lobby. Game will start automatically when all peers are ready."
+        )
 
         while not game_started:
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
@@ -357,43 +359,29 @@ def main(listen_port, peer_addrs):
                         for idx, ip in enumerate(sorted(unique_ips), 1):
                             print(f"{idx}. {ip}")
                         print("=====================\n")
-                elif cmd == "start":
-                    leader = min(all_addrs)
-                    if listen_addr == leader or f"localhost:{listen_port}" == leader:
-                        with ready_lock:
-                            if len(unique_ips) >= expected_peers:
-                                seed = random.randint(0, 1_000_000)
-                                net.broadcast(
-                                    tetris_pb2.TetrisMessage(
-                                        type=tetris_pb2.START, seed=seed
-                                    )
-                                )
-                                game_started = True
-                                game_started_event.set()
-                                print(f"[LOBBY] You (leader) START, seed = {seed}")
-                            else:
-                                print(
-                                    f"[LOBBY] Cannot start: waiting for {expected_peers - len(unique_ips)} more players to be ready"
-                                )
-                    else:
-                        print(f"[LOBBY] Only leader ({leader}) can START")
                 elif cmd == "quit":
                     print("[LOBBY] Exiting...")
                     sys.exit(0)
                 else:
-                    print("[LOBBY] Unknown command. Use 'ready', 'start', or 'quit'.")
+                    print("[LOBBY] Unknown command. Use 'ready', 'peers', or 'quit'.")
 
+            # Check if all expected peers are ready
             with ready_lock:
                 if not game_started and len(unique_ips) >= expected_peers:
-                    leader = min(all_addrs)
-                    if listen_addr == leader or f"localhost:{listen_port}" == leader:
-                        seed = random.randint(0, 1000000)
-                        net.broadcast(
-                            tetris_pb2.TetrisMessage(type=tetris_pb2.START, seed=seed)
-                        )
-                        game_started = True
-                        game_started_event.set()
-                        print(f"[LOBBY] All ready. Leader auto START, seed = {seed}")
+                    # Generate a deterministic seed based on the sorted list of peer IPs
+                    # This ensures all peers generate the same seed without a leader
+                    seed_source = ",".join(sorted(unique_ips))
+                    seed = hash(seed_source) % 1000000
+
+                    # Broadcast START to all peers
+                    net.broadcast(
+                        tetris_pb2.TetrisMessage(type=tetris_pb2.START, seed=seed)
+                    )
+                    game_started = True
+                    game_started_event.set()
+                    print(
+                        f"[LOBBY] All players ready! Game starting automatically with seed = {seed}"
+                    )
 
             # Wait for game start or check again in a short time
             game_started = game_started_event.wait(0.1)
@@ -502,9 +490,6 @@ def main(listen_port, peer_addrs):
         }
         results_timeout = time.time() + 10  # 10 second timeout
 
-        leader = min(all_addrs)
-        is_leader = listen_addr == leader or f"localhost:{listen_port}" == leader
-
         while len(scores) < len(all_addrs) and time.time() < results_timeout:
             try:
                 peer_id, msg = net.incoming.get(timeout=0.5)
@@ -522,8 +507,20 @@ def main(listen_port, peer_addrs):
             except queue.Empty:
                 continue
 
-        # Leader broadcasts results - modified to use player names when available
-        if is_leader and not results_received:
+        # Wait for results or timeout
+        results_received = results_received_event.wait(5)
+
+        # Everyone broadcasts their own results
+        if not results_received:
+            # First, broadcast our own score for any peers that might have missed it
+            net.broadcast(
+                tetris_pb2.TetrisMessage(
+                    type=tetris_pb2.LOSE,
+                    score=int(final_score["survival_time"]),
+                    extra=f"{final_score['attacks_sent']}:{final_score['attacks_received']}".encode(),
+                )
+            )
+
             # Create a mapping from peer_id to player name
             player_names = {}
             with peer_boards_lock:
@@ -534,7 +531,7 @@ def main(listen_port, peer_addrs):
             # Include current player
             player_names[listen_addr] = player_name
 
-            # Format results with player names and survival time when available
+            # Format results with player names and survival time
             results_list = []
             for pid, result_data in sorted(
                 scores.items(), key=lambda x: -float(x[1].split(":")[0])
@@ -556,48 +553,16 @@ def main(listen_port, peer_addrs):
 
             results_str = " | ".join(results_list)
 
+            # Everyone broadcasts results to ensure all peers have them
             net.broadcast(
                 tetris_pb2.TetrisMessage(
                     type=tetris_pb2.GAME_RESULTS, results=results_str
                 )
             )
-            print(f"[RESULTS] Leader broadcasting = {results_str}")
 
-        # Wait for results or timeout
-        results_received = results_received_event.wait(5)
-
-        if not results_received:
             print("=== FINAL RESULTS ===")
-            print("Players ranked by survival time:")
-            # Create a mapping from peer_id to player name
-            player_names = {}
-            with peer_boards_lock:
-                for pid, data in peer_boards.items():
-                    if "player_name" in data:
-                        player_names[pid] = data["player_name"]
-
-            # Include current player
-            player_names[listen_addr] = player_name
-
-            # Display sorted results with player names and survival time
-            sorted_scores = sorted(
-                scores.items(), key=lambda x: -float(x[1].split(":")[0])
-            )
-            for i, (peer_id, result_data) in enumerate(sorted_scores):
-                player = player_names.get(peer_id, peer_id)
-
-                # Parse the result data (survival time and attacks)
-                result_parts = result_data.split(":")
-                survival_time = float(result_parts[0])
-
-                # Get attacks data if available
-                attacks_sent = int(result_parts[1]) if len(result_parts) > 1 else 0
-                attacks_received = int(result_parts[2]) if len(result_parts) > 2 else 0
-
-                # Format as: "1. PlayerName: 120.5s (Attacks: 15→, 8←)"
-                print(
-                    f"{i+1}. {player}: {survival_time:.1f}s (Attacks: {attacks_sent}→, {attacks_received}←)"
-                )
+            print(results_str)
+            print("=====================")
 
         while not net.incoming.empty():
             try:
