@@ -199,26 +199,13 @@ def main(listen_port, peer_addrs):
                         peer_boards[peer_id] = board_state
                 elif msg.type == tetris_pb2.READY:
                     with ready_lock:
-                        # Get peer identity for better deduplication
-                        peer_identity = net._get_peer_identity(peer_id)
-
-                        # Check if this peer identity is already in our tracked set
-                        is_duplicate = False
-                        for existing_peer in ready_peers:
-                            if net._get_peer_identity(existing_peer) == peer_identity:
-                                is_duplicate = True
-                                print(
-                                    f"[LOBBY DEBUG] Ignoring duplicate READY from {peer_id} (identity {peer_identity} already registered)"
-                                )
-                                break
-
-                        if not is_duplicate:
-                            # This is a new unique peer
-                            ready_peers.add(peer_id)
-                            unique_ips.add(peer_identity)
-                            print(
-                                f"[LOBBY] {peer_id} READY ({len(unique_ips)}/{expected_peers})"
-                            )
+                        # Use sender's self-reported listen address
+                        sender_addr = msg.sender  # Added to protobuf
+                        normalized_peer = net._normalize_peer_addr(sender_addr)
+                        
+                        if normalized_peer not in unique_ips:
+                            unique_ips.add(normalized_peer)
+                            print(f"[LOBBY] {normalized_peer} READY ({len(unique_ips)}/{expected_peers})")
                 elif msg.type == tetris_pb2.START:
                     seed = msg.seed
                     print(f"[LOBBY] Received START, seed = {seed}")
@@ -320,7 +307,7 @@ def main(listen_port, peer_addrs):
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                 cmd = sys.stdin.readline().strip().lower()
                 if cmd == "ready":
-                    net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.READY))
+                    net.broadcast(tetris_pb2.TetrisMessage(type=tetris_pb2.READY, sender=listen_addr))
                     with ready_lock:
                         # Get our own identity
                         self_identity = net._get_peer_identity(listen_addr)

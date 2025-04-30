@@ -289,10 +289,22 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
             print(f"[ERROR] Failed to normalize peer address {addr}: {e}")
             return addr
 
+    # def _get_peer_identity(self, addr):
+    #     """Extract a unique identity including port"""
+    #     norm_addr = self._normalize_peer_addr(addr)
+    #     return norm_addr.lower()  # Keep host:port as identity
     def _get_peer_identity(self, addr):
-        """Extract a unique identity including port"""
-        norm_addr = self._normalize_peer_addr(addr)
-        return norm_addr.lower()  # Keep host:port as identity
+        """Extract identity using only the peer's listen port"""
+        try:
+            if ":" in addr:
+                host, port = addr.rsplit(":", 1)
+                # Use port if it's in our known listen port range (50051-50054)
+                if port.isdigit() and 50051 <= int(port) <= 50054:
+                    return f"{host}:{port}"
+            return host.lower()  # For ephemeral ports, use just IP
+        except Exception:
+            return addr.lower()
+
 
     def _is_duplicate_connection(self, peer_id):
         """Check if we already have a connection to this peer's identity"""
