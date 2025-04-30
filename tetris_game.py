@@ -719,6 +719,7 @@ def get_piece_shape(piece_type, rotation):
 #             return True
 #         return False
 
+
 # ComboSystem class to handle combo logic
 class ComboSystem:
     def __init__(self):
@@ -737,7 +738,9 @@ class ComboSystem:
         debug_message = None
 
         # Add detailed logging at the start of the update
-        print(f"[COMBO DEBUG] update called: lines_cleared={lines_cleared}, time={current_time:.2f}")
+        print(
+            f"[COMBO DEBUG] update called: lines_cleared={lines_cleared}, time={current_time:.2f}"
+        )
         print(f"[COMBO DEBUG]  - Before: count={self.combo_count}")
 
         if lines_cleared > 0:
@@ -745,22 +748,36 @@ class ComboSystem:
             if self.last_placement_cleared_lines:
                 # Previous placement also cleared lines, so increment combo
                 self.combo_count += 1
-                print(f"[COMBO DEBUG]  - Previous placement cleared lines too. Incrementing combo to {self.combo_count}")
-                
+                print(
+                    f"[COMBO DEBUG]  - Previous placement cleared lines too. Incrementing combo to {self.combo_count}"
+                )
+
                 # Show combo message if 2 or more in combo count
-                if self.combo_count >= 1:  # In Jstris, even the first combo (consecutive clears) gets a message
+                if (
+                    self.combo_count >= 1
+                ):  # In Jstris, even the first combo (consecutive clears) gets a message
                     debug_message = f"COMBO x{self.combo_count}!"
+            elif lines_cleared > 1:
+                debug_message = f"COMBO x{lines_cleared}!"
+                self.combo_count = lines_cleared
+                print(f"[COMBO DEBUG]  - New combo started with {lines_cleared} lines")
             else:
                 # First line clear in a potential combo
-                self.combo_count = 0  # Reset to 0 as this is potentially the first part of a new combo
-                print(f"[COMBO DEBUG]  - First line clear, setting combo to {self.combo_count}")
-            
+                self.combo_count = (
+                    0  # Reset to 0 as this is potentially the first part of a new combo
+                )
+                print(
+                    f"[COMBO DEBUG]  - First line clear, setting combo to {self.combo_count}"
+                )
+
             # Remember that this placement cleared lines
             self.last_placement_cleared_lines = True
         else:
             # No lines cleared, reset combo
             if self.combo_count > 0 or self.last_placement_cleared_lines:
-                print(f"[COMBO DEBUG]  - No lines cleared, resetting combo from {self.combo_count} to 0")
+                print(
+                    f"[COMBO DEBUG]  - No lines cleared, resetting combo from {self.combo_count} to 0"
+                )
             self.combo_count = 0
             self.last_placement_cleared_lines = False
             self.total_combo_garbage_sent = 0  # Reset garbage tracking for the combo
@@ -771,13 +788,15 @@ class ComboSystem:
             self.debug_time = current_time
 
         # Add detailed logging at the end of the update
-        print(f"[COMBO DEBUG]  - After: count={self.combo_count}, last_cleared={self.last_placement_cleared_lines}")
+        print(
+            f"[COMBO DEBUG]  - After: count={self.combo_count}, last_cleared={self.last_placement_cleared_lines}"
+        )
 
         # Return current combo count (for display) and any debug message
         return {
             "combo_count": self.combo_count,
             "debug_message": debug_message,
-            "is_combo_active": self.last_placement_cleared_lines
+            "is_combo_active": self.last_placement_cleared_lines,
         }
 
     def get_display(self):
@@ -795,13 +814,18 @@ class ComboSystem:
         # This is different from "combo count - 1" formula
         if self.combo_count >= 1:
             garbage_count = (self.combo_count + 1) // 2  # Integer division
-            print(f"[COMBO DEBUG] get_garbage_count: count={self.combo_count}, returning={garbage_count}")
+            print(
+                f"[COMBO DEBUG] get_garbage_count: count={self.combo_count}, returning={garbage_count}"
+            )
             return garbage_count
         return 0
 
     def check_debug_timeout(self, current_time):
         """Check if debug message should be cleared due to timeout"""
-        if self.debug_message and current_time - self.debug_time > self.debug_display_time:
+        if (
+            self.debug_message
+            and current_time - self.debug_time > self.debug_display_time
+        ):
             self.debug_message = ""
             return True
         return False
@@ -1111,12 +1135,14 @@ def run_game(
                     # Set the debug message for combo if there is one
                     if combo_result["debug_message"]:
                         player_display_name = player_name if player_name else "You"
-                        combo_system.debug_message = f"{player_display_name} {combo_result['debug_message']}"
-                        
+                        combo_system.debug_message = (
+                            f"{player_display_name} {combo_result['debug_message']}"
+                        )
+
                     # Calculate score based on lines cleared
                     score += calculate_score(lines, level)
                     lines_cleared_total += lines
-                    
+
                     # Send garbage if we have a combo running and lines were cleared
                     if lines > 0:
                         # Send garbage to opponents if combo is active
@@ -1127,20 +1153,22 @@ def run_game(
                                     if peer_boards:
                                         # Find peer with lowest score (worst performer)
                                         worst_peer_id, worst_peer_data = min(
-                                            peer_boards.items(), 
-                                            key=lambda item: item[1]['score']
+                                            peer_boards.items(),
+                                            key=lambda item: item[1]["score"],
                                         )
-                                        print(f"[STRATEGY] Targeting worst player {worst_peer_id} "
-                                            f"(score: {worst_peer_data['score']})")
-                                        
+                                        print(
+                                            f"[STRATEGY] Targeting worst player {worst_peer_id} "
+                                            f"(score: {worst_peer_data['score']})"
+                                        )
+
                                         client_socket.send(
                                             worst_peer_id,
-                                            f"GARBAGE:{garbage_count}\n".encode()
+                                            f"GARBAGE:{garbage_count}\n".encode(),
                                         )
                                         attacks_sent += garbage_count
                             except Exception as e:
                                 print(f"[ERROR] Failed to target worst player: {e}")
-                    
+
                     # Reset for next piece
                     current_piece = next_piece
                     next_piece = get_next_piece()
@@ -1233,12 +1261,14 @@ def run_game(
                     # Set the debug message for combo if there is one
                     if combo_result["debug_message"]:
                         player_display_name = player_name if player_name else "You"
-                        combo_system.debug_message = f"{player_display_name} {combo_result['debug_message']}"
-                        
+                        combo_system.debug_message = (
+                            f"{player_display_name} {combo_result['debug_message']}"
+                        )
+
                     # Calculate score based on lines cleared
                     score += calculate_score(lines, level)
                     lines_cleared_total += lines
-                    
+
                     # Send garbage if we have a combo running and lines were cleared
                     if lines > 0:
                         # Send garbage to opponents if combo is active
@@ -1249,20 +1279,22 @@ def run_game(
                                     if peer_boards:
                                         # Find peer with lowest score (worst performer)
                                         worst_peer_id, worst_peer_data = min(
-                                            peer_boards.items(), 
-                                            key=lambda item: item[1]['score']
+                                            peer_boards.items(),
+                                            key=lambda item: item[1]["score"],
                                         )
-                                        print(f"[STRATEGY] Targeting worst player {worst_peer_id} "
-                                            f"(score: {worst_peer_data['score']})")
-                                        
+                                        print(
+                                            f"[STRATEGY] Targeting worst player {worst_peer_id} "
+                                            f"(score: {worst_peer_data['score']})"
+                                        )
+
                                         client_socket.send(
                                             worst_peer_id,
-                                            f"GARBAGE:{garbage_count}\n".encode()
+                                            f"GARBAGE:{garbage_count}\n".encode(),
                                         )
                                         attacks_sent += garbage_count
                             except Exception as e:
                                 print(f"[ERROR] Failed to target worst player: {e}")
-                    
+
                     # Reset for next piece
                     current_piece = next_piece
                     next_piece = get_next_piece()
