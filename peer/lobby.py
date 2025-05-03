@@ -461,10 +461,34 @@ def main(listen_port, peer_addrs):
                             f"[PEER SOCKET DEBUG] Broadcast GARBAGE message to network: {n} lines"
                         )
                 elif s.startswith("LOSE:"):
-                    sc = int(s.split(":", 1)[1])
-                    net.broadcast(
-                        tetris_pb2.TetrisMessage(type=tetris_pb2.LOSE, score=sc)
-                    )
+                    try:
+                        # Parse format LOSE:survival_time:attacks_sent:attacks_received
+                        parts = s.split(":")
+                        if len(parts) >= 4:
+                            survival_time_float = float(parts[1])
+                            attacks_sent_int = int(parts[2])
+                            attacks_received_int = int(parts[3])
+
+                            print(
+                                f"[PEER SOCKET DEBUG] Parsed LOSE: time={survival_time_float}, sent={attacks_sent_int}, rcvd={attacks_received_int}"
+                            )
+
+                            # Create the Protobuf message
+                            net.broadcast(
+                                tetris_pb2.TetrisMessage(
+                                    type=tetris_pb2.LOSE,
+                                    score=int(
+                                        survival_time_float
+                                    ),  # Send integer part of survival time
+                                    extra=f"{attacks_sent_int}:{attacks_received_int}".encode(),
+                                )
+                            )
+                        else:
+                            print(
+                                f"[PEER SOCKET ERROR] Invalid LOSE format '{s}': Not enough parts."
+                            )
+                    except (ValueError, IndexError) as e:
+                        print(f"[PEER SOCKET ERROR] Invalid LOSE format '{s}': {e}")
                 elif s.startswith("BOARD_STATE:"):
                     # Expected format: "BOARD_STATE:score:flattened_board:piece_info"
                     # Where piece_info is "piece_type,x,y,rotation,color" or "NONE" if no active piece

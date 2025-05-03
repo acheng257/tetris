@@ -53,3 +53,43 @@ python -m peer.peer --port 50053 --peers localhost:50051 localhost:50052 localho
 ```
 
 This will start three peers listening on ports 50051, 50052, and 50053, respectively, and aware of each other.
+
+## Code Structure
+
+The codebase is organized into several modules:
+
+- **`peer/`**: Contains the peer-to-peer networking code
+  - `peer.py`: Main entry point for running a peer
+  - `lobby.py`: Manages the game lobby, player readiness, and game start coordination
+  - `grpc_peer.py`: Implements the P2P network layer using gRPC
+
+- **`proto/`**: Contains Protocol Buffer definitions
+  - `tetris.proto`: Protocol definitions for game messages (READY, START, GARBAGE, etc.)
+  - `tetris_pb2.py` and `tetris_pb2_grpc.py`: Generated Protocol Buffer code
+
+- **`game/`**: Contains game logic
+  - `state.py`: Core game state management (board, pieces, scoring, etc.)
+  - `combo.py`: Handles combo system for clearing multiple lines
+
+- **`ui/`**: Contains user interface code
+  - `curses_renderer.py`: Manages rendering the game using the curses library
+
+- **`tetris_game.py`**: Main game loop and controller that integrates the modules above
+
+## Game Controls
+
+- **Left/Right Arrow Keys**: Move piece horizontally
+- **Up Arrow Key**: Rotate piece
+- **Down Arrow Key**: Soft drop (accelerate piece downward)
+- **Space**: Hard drop (instantly drop piece to bottom)
+- **C**: Hold piece for later use
+- **Q**: Quit game
+
+## Game Features
+
+- **Player vs. Player**: Compete against multiple players in real-time
+- **Garbage Lines**: Send garbage lines to opponents when you clear multiple lines
+- **Combo System**: Clear lines consecutively to build combos and send more garbage
+- **Hold Piece**: Store a piece for later use
+- **Ghost Piece**: Shows where the current piece will land
+- **Opponent Boards**: View mini-versions of opponents' boards
