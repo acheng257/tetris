@@ -258,7 +258,9 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         with self.lock:
             if target_addr in self.out_queues:
                 if hasattr(msg, "type") and msg.type == tetris_pb2.GARBAGE:
-                    print(f"[P2P DEBUG] Sending GARBAGE to {target_addr}: {msg.garbage} lines")
+                    print(
+                        f"[P2P DEBUG] Sending GARBAGE to {target_addr}: {msg.garbage} lines"
+                    )
                 self.out_queues[target_addr].put(msg)
             else:
                 print(f"[ERROR] No connection to {target_addr}")
@@ -289,22 +291,58 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
             print(f"[ERROR] Failed to normalize peer address {addr}: {e}")
             return addr
 
-    # def _get_peer_identity(self, addr):
-    #     """Extract a unique identity including port"""
-    #     norm_addr = self._normalize_peer_addr(addr)
-    #     return norm_addr.lower()  # Keep host:port as identity
     def _get_peer_identity(self, addr):
-        """Extract identity using only the peer's listen port"""
-        try:
-            if ":" in addr:
-                host, port = addr.rsplit(":", 1)
-                # Use port if it's in our known listen port range (50051-50054)
-                if port.isdigit() and 50051 <= int(port) <= 50054:
-                    return f"{host}:{port}"
-            return host.lower()  # For ephemeral ports, use just IP
-        except Exception:
-            return addr.lower()
+        """
+        Extract a unique identity that properly handles different network representations
+        of the same peer, especially on localhost.
 
+        Normalized identity format should be host:port, with special handling for localhost
+        """
+        try:
+            # Handle URL-encoded characters (from gRPC representation)
+            if "%5B" in addr:  # URL-encoded '['
+                addr = addr.replace("%5B", "[").replace("%5D", "]")
+
+            # Remove protocol prefix if present (ipv4:, ipv6:)
+            if ":" in addr and addr.split(":", 1)[0] in ("ipv4", "ipv6"):
+                addr = addr.split(":", 1)[1]
+
+            # Extract host and port
+            host, port = None, None
+
+            # Handle IPv6 addresses with brackets [::1]:port
+            if addr.startswith("[") and "]:" in addr:
+                # Format: [ipv6_addr]:port
+                ipv6_end = addr.find("]")
+                host = addr[1:ipv6_end]  # Remove brackets
+                port = addr[ipv6_end + 2 :]  # Skip the ":" after "]"
+            elif addr.startswith("[") and addr.endswith("]"):
+                # Format: [ipv6_addr] without port
+                host = addr[1:-1]  # Remove brackets
+                port = str(self.listen_port)  # Use listen port as this is likely server
+            elif ":" in addr:
+                # Format: host:port
+                parts = addr.rsplit(
+                    ":", 1
+                )  # Split on last colon to handle IPv6 with colons
+                host = parts[0]
+                port = parts[1]
+            else:
+                # No port specified
+                host = addr
+                port = "0"
+
+            # Normalize localhost variations
+            if host in ("127.0.0.1", "localhost", "::1", "::", "0.0.0.0"):
+                host = "localhost"
+
+            # Combine and normalize
+            canonical_id = f"{host.lower()}:{port}"
+            return canonical_id
+
+        except Exception as e:
+            print(f"[ERROR] Failed to normalize peer identity from {addr}: {e}")
+            return addr.lower()  # Fall back to lowercased original
 
     def _is_duplicate_connection(self, peer_id):
         """Check if we already have a connection to this peer's identity"""
