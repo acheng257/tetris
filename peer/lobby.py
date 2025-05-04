@@ -5,68 +5,10 @@ import queue
 import time
 import threading
 import socket
+import curses
 from proto import tetris_pb2
 from peer.grpc_peer import P2PNetwork
-from tetris_game import create_piece_generator, run_game
-
-
-def generate_random_name():
-    """Generate a random player name"""
-    adjectives = [
-        "Cool",
-        "Swift",
-        "Mighty",
-        "Quick",
-        "Brave",
-        "Agile",
-        "Epic",
-        "Fast",
-        "Grand",
-        "Noble",
-        "Rapid",
-        "Super",
-        "Power",
-        "Prime",
-        "Elite",
-        "Neon",
-        "Pixel",
-        "Cyber",
-        "Retro",
-        "Hyper",
-        "Ultra",
-        "Mega",
-        "Alpha",
-        "Beta",
-    ]
-
-    nouns = [
-        "Player",
-        "Master",
-        "Knight",
-        "Falcon",
-        "Tiger",
-        "Dragon",
-        "Eagle",
-        "Wolf",
-        "Wizard",
-        "Hunter",
-        "Ninja",
-        "Gamer",
-        "Hero",
-        "Legend",
-        "Warrior",
-        "Commander",
-        "Captain",
-        "Pilot",
-        "Ranger",
-        "Titan",
-        "Phoenix",
-        "Cobra",
-        "Viper",
-        "Monarch",
-    ]
-
-    return f"{random.choice(adjectives)}{random.choice(nouns)}"
+from tetris_game import create_piece_generator, run_game, init_colors
 
 
 def flatten_board(board):
@@ -130,418 +72,237 @@ def extract_ip(peer_id):
     return peer_id.lower()
 
 
-def main(listen_port, peer_addrs):
+def run_lobby_ui_and_game(listen_port, peer_addrs, player_name):
+    """Top-level function to initialize curses and run lobby/game."""
+    # curses.wrapper handles initscr, cleanup, and terminal restoration
+    print("[LOBBY] Starting curses wrapper...")
+    curses.wrapper(_run_lobby_ui_wrapper, listen_port, peer_addrs, player_name)
+    print("[LOBBY] Curses wrapper finished.")
+
+
+def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
+    """Main function called by curses.wrapper. Handles UI and game flow."""
+    print("[LOBBY UI] Inside curses wrapper.")
+
+    # Initialize curses settings within the wrapper
+    stdscr.nodelay(True)  # Non-blocking input
+    curses.curs_set(0)  # Hide cursor
+    stdscr.keypad(True)  # Enable special keys (like arrow keys)
+    init_colors()  # Initialize color pairs (function assumed to be in tetris_game or ui module)
+
     listen_addr = f"[::]:{listen_port}"
+    print(f"[LOBBY UI] Setting up P2P Network on {listen_addr} for {player_name}")
     net = P2PNetwork(listen_addr, peer_addrs)
 
-    # Generate a random player name
-    player_name = generate_random_name()
-    print(f"You are playing as: {player_name}")
-
-    # Store hostname to avoid having to repeat this
-    hostname = socket.gethostname()
-
-    # Full list of peer addresses (including this one)
-    all_addrs = sorted(set(peer_addrs))  # Use a set to deduplicate addresses
-
-    # Print all peer addresses for debugging
-    print(f"[DEBUG] Original peer addresses: {peer_addrs}")
-    print(f"[DEBUG] Deduplicated peer addresses: {all_addrs}")
-
-    # The total number of expected peers (including self)
+    all_addrs = sorted(set(peer_addrs))
     expected_peers = len(all_addrs)
-    print(f"[LOBBY] Expecting {expected_peers} total peers")
+    print(f"[LOBBY UI] Expecting {expected_peers} total peers.")
 
-    # Dictionary to store the current board state of all peers
+    # --- Shared State (for communication between threads and UI) ---
     peer_boards = {}
     peer_boards_lock = threading.Lock()
+    game_message_queue = queue.Queue()  # For GARBAGE, etc., from net to game
+    lobby_status_queue = (
+        queue.Queue()
+    )  # For READY, LOSE, RESULTS etc from net to lobby UI
 
-    # Queue for forwarding GARBAGE messages to the game
-    game_message_queue = queue.Queue()
+    game_started_event = threading.Event()
+    results_received_event = threading.Event()
 
-    # Track unique peers that are ready
-    ready_peers = set()
+    # Store results data when LOSE messages come in
+    scores = {}  # peer_id -> result_string
+    scores_lock = threading.Lock()
+
+    # Track ready state based on unique IPs/normalized addrs
+    ready_peers_normalized = set()
     ready_lock = threading.Lock()
-    # Set to track unique IP addresses (without port) that are ready
-    unique_ips = set()
 
-    # Thread to process incoming game state messages
-    def process_game_states():
-        nonlocal seed
-        nonlocal scores
-        scores = {}
-        while True:
-            try:
-                peer_id, msg = net.incoming.get(timeout=0.1)
-                if msg.type == tetris_pb2.GAME_STATE:
-                    with peer_boards_lock:
-                        board_state = {
-                            "board": unflatten_board(
-                                msg.board_state.cells,
-                                msg.board_state.width,
-                                msg.board_state.height,
-                            ),
-                            "score": msg.board_state.score,
-                            "player_name": msg.board_state.player_name,
-                            "timestamp": time.time(),
-                        }
+    # --- Network Processing Thread ---
+    print("[LOBBY UI] Starting network processing thread...")
+    network_thread = threading.Thread(
+        target=process_network_messages,  # Renamed from process_game_states
+        args=(
+            net,
+            game_message_queue,
+            lobby_status_queue,
+            peer_boards,
+            peer_boards_lock,
+            scores,
+            scores_lock,
+            ready_peers_normalized,
+            ready_lock,
+            game_started_event,
+            results_received_event,
+            listen_addr,  # Pass own listen address for comparison
+        ),
+        daemon=True,
+    )
+    network_thread.start()
 
-                        # Add active piece information if present
-                        if msg.board_state.HasField("active_piece"):
-                            board_state["active_piece"] = {
-                                "type": msg.board_state.active_piece.piece_type,
-                                "x": msg.board_state.active_piece.x,
-                                "y": msg.board_state.active_piece.y,
-                                "rotation": msg.board_state.active_piece.rotation,
-                                "color": msg.board_state.active_piece.color,
-                            }
-
-                        peer_boards[peer_id] = board_state
-                elif msg.type == tetris_pb2.READY:
-                    with ready_lock:
-                        # Use sender's self-reported listen address
-                        sender_addr = msg.sender  # Added to protobuf
-                        normalized_peer = net._normalize_peer_addr(sender_addr)
-
-                        if normalized_peer not in unique_ips:
-                            unique_ips.add(normalized_peer)
-                            print(
-                                f"[LOBBY] {normalized_peer} READY ({len(unique_ips)}/{expected_peers})"
-                            )
-                elif msg.type == tetris_pb2.START:
-                    seed = msg.seed
-                    print(f"[LOBBY] Received START, seed = {seed}")
-                    game_started_event.set()
-                elif msg.type == tetris_pb2.LOSE:
-                    if peer_id not in scores:
-                        # Handle LOSE message with survival time and attacks data
-                        survival_time = msg.score
-                        attacks_data = ""
-
-                        # Check for additional attack data in the extra field
-                        if hasattr(msg, "extra") and msg.extra:
-                            try:
-                                attacks_data = msg.extra.decode()
-                            except Exception:
-                                pass
-
-                        # Store the result data: survival_time:attacks_sent:attacks_received
-                        result_data = f"{survival_time:.2f}"
-                        if attacks_data:
-                            result_data += f":{attacks_data}"
-
-                        scores[peer_id] = result_data
-
-                        # Get player name if available
-                        player = peer_boards.get(peer_id, {}).get(
-                            "player_name", peer_id
-                        )
-
-                        # Parse and display the data
-                        parts = result_data.split(":")
-                        survival_time = float(parts[0])
-                        attacks_sent = int(parts[1]) if len(parts) > 1 else 0
-                        attacks_received = int(parts[2]) if len(parts) > 2 else 0
-
-                        print(
-                            f"[RESULTS] {player} survived for {survival_time:.1f}s (Attacks: {attacks_sent}→, {attacks_received}←)"
-                        )
-                elif msg.type == tetris_pb2.GAME_RESULTS:
-                    print("=== FINAL RESULTS ===")
-                    print(msg.results)
-                    print("=====================")
-                    results_received = True
-                    results_received_event.set()
-                elif msg.type == tetris_pb2.GARBAGE:
-                    if peer_id != listen_addr:  # Don't apply our own garbage
-                        print(
-                            f"[LOBBY DEBUG] Received GARBAGE message from {peer_id}: {msg.garbage} lines"
-                        )
-                        try:
-                            # Put GARBAGE message in queue for game to consume
-                            game_message_queue.put(f"GARBAGE:{msg.garbage}")
-                            print(
-                                f"[LOBBY DEBUG] Queued garbage for game: {msg.garbage} lines"
-                            )
-                        except Exception as e:
-                            print(f"[LOBBY DEBUG] Error queueing garbage: {e}")
-                    else:
-                        print(
-                            f"[LOBBY DEBUG] Ignored own GARBAGE message: {msg.garbage} lines"
-                        )
-            except queue.Empty:
-                pass
-            except Exception as e:
-                print(f"[LOBBY ERROR] Error processing message from {peer_id}: {e}")
-                import traceback
-
-                print(f"[LOBBY ERROR] Traceback: {traceback.format_exc()}")
-
-    # Start game state processing thread
-    game_state_thread = threading.Thread(target=process_game_states, daemon=True)
-    game_state_thread.start()
-
-    while True:
-        # Reset state each round
+    # --- Game Loop ---
+    while True:  # Loop for multiple games
+        # Reset per-game state
+        game_started_event.clear()
+        results_received_event.clear()
+        with scores_lock:
+            scores.clear()
         with ready_lock:
-            ready_peers.clear()
-            unique_ips.clear()
-
-        game_started = False
-        scores = {}
-        game_started_event = threading.Event()
-        seed = None
-        results_received = False
-        results_received_event = threading.Event()
-
-        # Clear peer boards between games
+            ready_peers_normalized.clear()
         with peer_boards_lock:
-            peer_boards.clear()
+            peer_boards.clear()  # Clear opponent boards for new game
 
-        print(
-            "Type 'ready' to join lobby. Game will start automatically when all peers are ready."
+        print("[LOBBY UI] Entering lobby menu...")
+        # Run the lobby menu UI - returns seed if game starts, None if user quits
+        start_info = run_lobby_menu(
+            stdscr,
+            net,
+            player_name,
+            expected_peers,
+            lobby_status_queue,
+            ready_peers_normalized,
+            ready_lock,
+            listen_addr,  # Pass own listen addr to mark self ready
+            game_started_event,  # Pass event to check for externally triggered start
         )
-        print(
-            "Other commands: 'peers' to see connected peers, 'net' to see network connections, 'quit' to exit."
-        )
 
-        while not game_started:
-            if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-                cmd = sys.stdin.readline().strip().lower()
-                if cmd == "ready":
-                    net.broadcast(
-                        tetris_pb2.TetrisMessage(
-                            type=tetris_pb2.READY, sender=listen_addr
-                        )
-                    )
-                    with ready_lock:
-                        # Get our own identity
-                        self_identity = net._get_peer_identity(listen_addr)
+        if start_info is None:
+            print("[LOBBY UI] User quit from lobby menu.")
+            break  # Exit the main loop if user quits
 
-                        # Check if we're already registered
-                        is_duplicate = False
-                        for existing_peer in ready_peers:
-                            if net._get_peer_identity(existing_peer) == self_identity:
-                                is_duplicate = True
-                                print(f"[LOBBY DEBUG] You are already marked as READY")
-                                break
+        seed = start_info["seed"]
+        print(f"[LOBBY UI] Lobby menu returned seed: {seed}. Starting game...")
 
-                        if not is_duplicate:
-                            ready_peers.add(listen_addr)
-                            unique_ips.add(self_identity)
-                            print(
-                                f"[LOBBY] You are READY ({len(unique_ips)}/{expected_peers})"
-                            )
-                elif cmd == "peers":
-                    # Print all peers that are ready and their normalized addresses
-                    with ready_lock:
-                        print("\n=== PEER ADDRESSES ===")
-                        print(f"Expected peers: {expected_peers}")
-                        print(f"Ready peers count: {len(ready_peers)}")
-                        print(f"Unique IPs count: {len(unique_ips)}")
-
-                        print("\nPeer Identity Mapping:")
-                        peer_identities = {}
-                        for peer in ready_peers:
-                            identity = net._get_peer_identity(peer)
-                            if identity not in peer_identities:
-                                peer_identities[identity] = []
-                            peer_identities[identity].append(peer)
-
-                        for idx, (identity, peers) in enumerate(
-                            sorted(peer_identities.items()), 1
-                        ):
-                            print(f"{idx}. {identity} -> {len(peers)} connection(s):")
-                            for p in peers:
-                                print(f"   - {p}")
-
-                        print("\nReady peers (Original addresses):")
-                        for idx, peer in enumerate(sorted(ready_peers), 1):
-                            identity = net._get_peer_identity(peer)
-                            print(f"{idx}. {peer} (Identity: {identity})")
-
-                        print("\nUnique IPs:")
-                        for idx, ip in enumerate(sorted(unique_ips), 1):
-                            print(f"{idx}. {ip}")
-                        print("=====================\n")
-                elif cmd == "net":
-                    # Show network connection details
-                    print("\n=== NETWORK CONNECTIONS ===")
-                    print(f"My listen address: {listen_addr}")
-                    print(f"All peer addresses: {all_addrs}")
-                    print(f"Total expected peers: {expected_peers}")
-
-                    print("\nActive connections:")
-                    with net.lock:
-                        print(f"Outgoing connections ({len(net.out_queues)}):")
-                        for idx, addr in enumerate(sorted(net.out_queues.keys()), 1):
-                            print(f"{idx}. {addr}")
-
-                        print(f"\nUnique peer connections ({len(net.unique_peers)}):")
-                        for idx, peer in enumerate(sorted(net.unique_peers), 1):
-                            print(f"{idx}. {peer}")
-                    print("=====================\n")
-                elif cmd == "quit":
-                    print("[LOBBY] Exiting...")
-                    sys.exit(0)
-                else:
-                    print(
-                        "[LOBBY] Unknown command. Use 'ready', 'peers', 'net', or 'quit'."
-                    )
-
-            # Check if all expected peers are ready
-            with ready_lock:
-                if not game_started and len(unique_ips) >= expected_peers:
-                    # Generate a deterministic seed based on the sorted list of peer IPs
-                    # This ensures all peers generate the same seed without a leader
-                    seed_source = ",".join(sorted(unique_ips))
-                    seed = hash(seed_source) % 1000000
-
-                    # Broadcast START to all peers
-                    net.broadcast(
-                        tetris_pb2.TetrisMessage(type=tetris_pb2.START, seed=seed)
-                    )
-                    game_started = True
-                    game_started_event.set()
-                    print(
-                        f"[LOBBY] All players ready! Game starting automatically with seed = {seed}"
-                    )
-
-            # Wait for game start or check again in a short time
-            game_started = game_started_event.wait(0.1)
-
-        print("=== GAME STARTED ===")
+        # --- Run the Actual Game ---
+        # We need a piece generator based on the agreed seed
         get_next_piece = create_piece_generator(seed)
 
+        # Create adapters for the game to interact with the network via queues
         class NetQueueAdapter(queue.Queue):
             def get_nowait(self):
-                try:
-                    # First check for game messages (GARBAGE, etc)
-                    return game_message_queue.get_nowait()
-                except queue.Empty:
-                    # If no game messages, get from network
-                    _, msg = net.incoming.get_nowait()
-                    return msg
+                # Game primarily consumes game messages (e.g., GARBAGE)
+                return game_message_queue.get_nowait()
 
-        class PeerSocket:
+        class PeerSocketAdapter:
             def send(self, target_addr, data: bytes):
-                s = data.decode().strip()
-                if s.startswith("GARBAGE:"):
-                    n = int(s.split(":", 1)[1])
-                    print(
-                        f"[PEER SOCKET DEBUG] Targeting {target_addr} with {n} garbage lines"
-                    )
-                    net.send(
-                        target_addr,
-                        tetris_pb2.TetrisMessage(
-                            type=tetris_pb2.GARBAGE,
-                            garbage=n,
-                            sender=listen_addr,
-                            extra=(player_name.encode() if player_name else b""),
-                        ),
-                    )
+                # This might need adjustment if direct sends are needed,
+                # currently game sends GARBAGE/LOSE via broadcast.
+                print(
+                    f"[PeerSocketAdapter] WARNING: send() called for {target_addr}, not implemented for direct P2P."
+                )
+                pass
 
             def sendall(self, data: bytes):
                 s = data.decode().strip()
+                print(
+                    f"[PeerSocketAdapter] sendall received: {s[:50]}..."
+                )  # Log truncated message
                 if s.startswith("GARBAGE:"):
-                    n = int(s.split(":", 1)[1])
-                    print(f"[PEER SOCKET DEBUG] Game sent GARBAGE message: {n} lines")
-                    if n > 0:
-                        net.broadcast(
-                            tetris_pb2.TetrisMessage(
-                                type=tetris_pb2.GARBAGE,
-                                garbage=n,
-                                sender=listen_addr,  # Include sender for self-identification
-                                extra=(
-                                    player_name.encode() if player_name else b""
-                                ),  # Include player name for better debug messages
+                    try:
+                        n = int(s.split(":", 1)[1])
+                        if n > 0:
+                            print(
+                                f"[PeerSocketAdapter] Broadcasting GARBAGE: {n} lines"
                             )
-                        )
-                        print(
-                            f"[PEER SOCKET DEBUG] Broadcast GARBAGE message to network: {n} lines"
-                        )
+                            net.broadcast(
+                                tetris_pb2.TetrisMessage(
+                                    type=tetris_pb2.GARBAGE,
+                                    garbage=n,
+                                    sender=listen_addr,
+                                    extra=(
+                                        player_name.encode() if player_name else b""
+                                    ),
+                                )
+                            )
+                    except ValueError:
+                        print(f"[PeerSocketAdapter] ERROR: Invalid GARBAGE format: {s}")
                 elif s.startswith("LOSE:"):
                     try:
-                        # Parse format LOSE:survival_time:attacks_sent:attacks_received
                         parts = s.split(":")
                         if len(parts) >= 4:
                             survival_time_float = float(parts[1])
                             attacks_sent_int = int(parts[2])
                             attacks_received_int = int(parts[3])
-
                             print(
-                                f"[PEER SOCKET DEBUG] Parsed LOSE: time={survival_time_float}, sent={attacks_sent_int}, rcvd={attacks_received_int}"
+                                f"[PeerSocketAdapter] Broadcasting LOSE: time={survival_time_float}, sent={attacks_sent_int}, rcvd={attacks_received_int}"
                             )
-
-                            # Create the Protobuf message
                             net.broadcast(
                                 tetris_pb2.TetrisMessage(
                                     type=tetris_pb2.LOSE,
-                                    score=int(
-                                        survival_time_float
-                                    ),  # Send integer part of survival time
+                                    score=int(survival_time_float),
                                     extra=f"{attacks_sent_int}:{attacks_received_int}".encode(),
                                 )
                             )
                         else:
                             print(
-                                f"[PEER SOCKET ERROR] Invalid LOSE format '{s}': Not enough parts."
+                                f"[PeerSocketAdapter] ERROR: Invalid LOSE format '{s}': Not enough parts."
                             )
                     except (ValueError, IndexError) as e:
-                        print(f"[PEER SOCKET ERROR] Invalid LOSE format '{s}': {e}")
+                        print(
+                            f"[PeerSocketAdapter] ERROR: Invalid LOSE format '{s}': {e}"
+                        )
                 elif s.startswith("BOARD_STATE:"):
-                    # Expected format: "BOARD_STATE:score:flattened_board:piece_info"
-                    # Where piece_info is "piece_type,x,y,rotation,color" or "NONE" if no active piece
-                    parts = s.split(":", 3)
-                    if len(parts) == 4:
-                        score = int(parts[1])
-                        board_cells = [int(cell) for cell in parts[2].split(",")]
-                        piece_info = parts[3]
+                    try:
+                        parts = s.split(":", 3)
+                        if len(parts) == 4:
+                            score = int(parts[1])
+                            board_cells = [int(cell) for cell in parts[2].split(",")]
+                            piece_info = parts[3]
 
-                        # Create BoardState message
-                        board_state = tetris_pb2.BoardState(
-                            cells=board_cells,
-                            width=10,  # BOARD_WIDTH
-                            height=20,  # BOARD_HEIGHT
-                            score=score,
-                            player_name=player_name,
-                        )
-
-                        # Add active piece if there is one
-                        if piece_info != "NONE":
-                            piece_parts = piece_info.split(",")
-                            if len(piece_parts) == 5:
-                                piece_type, x, y, rotation, color = piece_parts
-                                active_piece = tetris_pb2.ActivePiece(
-                                    piece_type=piece_type,
-                                    x=int(x),
-                                    y=int(y),
-                                    rotation=int(rotation),
-                                    color=int(color),
-                                )
-                                board_state.active_piece.CopyFrom(active_piece)
-
-                        # Broadcast the message
-                        net.broadcast(
-                            tetris_pb2.TetrisMessage(
-                                type=tetris_pb2.GAME_STATE, board_state=board_state
+                            board_state = tetris_pb2.BoardState(
+                                cells=board_cells,
+                                width=10,
+                                height=20,
+                                score=score,
+                                player_name=player_name,
                             )
-                        )
+                            if piece_info != "NONE":
+                                piece_parts = piece_info.split(",")
+                                if len(piece_parts) == 5:
+                                    ptype, x, y, rot, color = piece_parts
+                                    active_piece = tetris_pb2.ActivePiece(
+                                        piece_type=ptype,
+                                        x=int(x),
+                                        y=int(y),
+                                        rotation=int(rot),
+                                        color=int(color),
+                                    )
+                                    board_state.active_piece.CopyFrom(active_piece)
 
-        # Pass peer_boards and player name to the game to display other players' boards
+                            # print(f"[PeerSocketAdapter] Broadcasting GAME_STATE for {player_name}") # Too noisy
+                            net.broadcast(
+                                tetris_pb2.TetrisMessage(
+                                    type=tetris_pb2.GAME_STATE, board_state=board_state
+                                )
+                            )
+                        else:
+                            print(
+                                f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format '{s}': Not enough parts."
+                            )
+                    except (ValueError, IndexError) as e:
+                        print(
+                            f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format '{s}': {e}"
+                        )
+                else:
+                    print(
+                        f"[PeerSocketAdapter] WARNING: Unsupported message type in sendall: {s[:20]}..."
+                    )
+
+        print(f"[LOBBY UI] Calling run_game for {player_name}")
+        # Pass stdscr to run_game now
         final_score = run_game(
+            stdscr,  # Pass the screen object
             get_next_piece,
-            PeerSocket(),
+            PeerSocketAdapter(),
             NetQueueAdapter(),
             listen_port,
             peer_boards,
             peer_boards_lock,
             player_name,
         )
-        print(
-            f"[RESULTS] Your stats: Survival Time = {final_score['survival_time']:.1f}s, Attacks: {final_score['attacks_sent']}→, {final_score['attacks_received']}←"
-        )
+        print(f"[LOBBY UI] Game finished for {player_name}. Final score: {final_score}")
 
+        # --- Post-Game Results Handling (Simplified Placeholder) ---
+        # Broadcast our LOSE message one last time in case it was missed
         net.broadcast(
             tetris_pb2.TetrisMessage(
                 type=tetris_pb2.LOSE,
@@ -550,89 +311,350 @@ def main(listen_port, peer_addrs):
             )
         )
 
-        scores = {
-            listen_addr: f"{final_score['survival_time']:.2f}:{final_score['attacks_sent']}:{final_score['attacks_received']}"
-        }
-        results_timeout = time.time() + 10  # 10 second timeout
+        # Display results screen (basic version)
+        draw_results_screen(
+            stdscr,
+            scores,
+            scores_lock,
+            player_name,
+            expected_peers,
+            results_received_event,
+        )
 
-        while len(scores) < len(all_addrs) and time.time() < results_timeout:
-            try:
-                peer_id, msg = net.incoming.get(timeout=0.5)
-                if msg.type == tetris_pb2.LOSE and peer_id not in scores:
-                    scores[peer_id] = msg.score
-                    player = peer_boards.get(peer_id, {}).get("player_name", peer_id)
-                    print(f"[RESULTS] {player} scored = {msg.score}")
-                elif msg.type == tetris_pb2.GAME_RESULTS:
-                    print("=== FINAL RESULTS ===")
-                    print(msg.results)
-                    print("=====================")
-                    results_received = True
-                    results_received_event.set()
-                    break
-            except queue.Empty:
-                continue
+        # Wait a bit before returning to lobby
+        time.sleep(5)
 
-        # Wait for results or timeout
-        results_received = results_received_event.wait(5)
 
-        # Everyone broadcasts their own results
-        if not results_received:
-            # First, broadcast our own score for any peers that might have missed it
+# --- Lobby Menu Implementation ---
+def run_lobby_menu(
+    stdscr,
+    net,
+    player_name,
+    expected_peers,
+    lobby_status_queue,
+    ready_peers_normalized,
+    ready_lock,
+    listen_addr,
+    game_started_event,
+):
+    """Displays the lobby menu, handles input, and waits for game start."""
+    print("[LOBBY MENU] Entered.")
+
+    menu_options = ["Ready", "View Peers", "View Network", "Quit"]
+    current_selection = 0
+    last_status_update = ""
+    seed = None
+
+    # Mark self as ready immediately if only one expected peer (solo play/debug)
+    if expected_peers == 1:
+        with ready_lock:
+            self_identity = net._get_peer_identity(listen_addr)
+            ready_peers_normalized.add(self_identity)
+            print(f"[LOBBY MENU] Auto-ready (1 player): {self_identity}")
             net.broadcast(
-                tetris_pb2.TetrisMessage(
-                    type=tetris_pb2.LOSE,
-                    score=int(final_score["survival_time"]),
-                    extra=f"{final_score['attacks_sent']}:{final_score['attacks_received']}".encode(),
-                )
+                tetris_pb2.TetrisMessage(type=tetris_pb2.READY, sender=listen_addr)
             )
 
-            # Create a mapping from peer_id to player name
-            player_names = {}
-            with peer_boards_lock:
-                for pid, data in peer_boards.items():
-                    if "player_name" in data:
-                        player_names[pid] = data["player_name"]
+    while True:
+        # --- Process Network Updates for UI ---
+        try:
+            status_update = lobby_status_queue.get_nowait()
+            # status_update could be ('READY', peer_addr), ('START', seed), ('PEER_COUNT', count), etc.
+            # For now, just store the latest message type
+            last_status_update = f"Net Status: {status_update[0]}"
+            if status_update[0] == "START":
+                seed = status_update[1]
+                game_started_event.set()  # Ensure event is set if START received
+                print(f"[LOBBY MENU] Received START via queue, seed={seed}")
 
-            # Include current player
-            player_names[listen_addr] = player_name
+        except queue.Empty:
+            pass
 
-            # Format results with player names and survival time
-            results_list = []
-            for pid, result_data in sorted(
-                scores.items(), key=lambda x: -float(x[1].split(":")[0])
-            ):
-                player = player_names.get(pid, pid)
+        # --- Check Game Start Conditions ---
+        # 1. Explicit START message received
+        if seed is not None:
+            print("[LOBBY MENU] Game starting due to received START message.")
+            return {"seed": seed}
 
-                # Parse the result data (survival time and attacks)
-                result_parts = result_data.split(":")
-                survival_time = float(result_parts[0])
+        # 2. All peers are ready (implicit start)
+        with ready_lock:
+            ready_count = len(ready_peers_normalized)
+            if ready_count >= expected_peers:
+                # Generate deterministic seed
+                seed_source = ",".join(sorted(ready_peers_normalized))
+                seed = hash(seed_source) % 1000000
+                print(
+                    f"[LOBBY MENU] All peers ready ({ready_count}/{expected_peers}). Broadcasting START, seed={seed}"
+                )
+                net.broadcast(
+                    tetris_pb2.TetrisMessage(type=tetris_pb2.START, seed=seed)
+                )
+                game_started_event.set()  # Signal game start
+                return {"seed": seed}
 
-                # Get attacks data if available
-                attacks_sent = int(result_parts[1]) if len(result_parts) > 1 else 0
-                attacks_received = int(result_parts[2]) if len(result_parts) > 2 else 0
+        # --- Draw Menu ---
+        stdscr.clear()
+        h, w = stdscr.getmaxyx()
 
-                # Format as: "PlayerName: 120.5s (Attacks: 15→, 8←)"
+        title = f"P2P Tetris Lobby - Player: {player_name}"
+        stdscr.addstr(1, (w - len(title)) // 2, title, curses.A_BOLD)
+
+        # Display ready status
+        with ready_lock:
+            ready_count = len(ready_peers_normalized)
+        status_line = (
+            f"Status: Waiting for players ({ready_count}/{expected_peers} ready)"
+        )
+        stdscr.addstr(3, 2, status_line)
+        stdscr.addstr(4, 2, last_status_update)  # Display last network event info
+
+        # Draw menu options
+        for i, option in enumerate(menu_options):
+            y = 6 + i
+            x = 5
+            if i == current_selection:
+                stdscr.addstr(y, x, f"> {option}", curses.A_REVERSE)
+            else:
+                stdscr.addstr(y, x, f"  {option}")
+
+        stdscr.refresh()
+
+        # --- Handle Input ---
+        try:
+            key = stdscr.getch()  # Non-blocking due to stdscr.nodelay(True)
+        except curses.error:
+            key = -1  # Handle potential error during resize etc.
+            time.sleep(0.05)  # Prevent busy-waiting on error
+
+        if key == curses.KEY_UP:
+            current_selection = (current_selection - 1) % len(menu_options)
+        elif key == curses.KEY_DOWN:
+            current_selection = (current_selection + 1) % len(menu_options)
+        elif key == ord("q"):  # Allow quitting with 'q'
+            selected_option = "Quit"
+            key = curses.KEY_ENTER  # Treat 'q' as selecting Quit
+        elif key == curses.KEY_ENTER or key == 10 or key == 13:
+            selected_option = menu_options[current_selection]
+            print(f"[LOBBY MENU] User selected: {selected_option}")
+
+            if selected_option == "Ready":
+                with ready_lock:
+                    self_identity = net._get_peer_identity(listen_addr)
+                    if self_identity not in ready_peers_normalized:
+                        ready_peers_normalized.add(self_identity)
+                        print(f"[LOBBY MENU] Sending READY message for {self_identity}")
+                        net.broadcast(
+                            tetris_pb2.TetrisMessage(
+                                type=tetris_pb2.READY, sender=listen_addr
+                            )
+                        )
+                    else:
+                        print(f"[LOBBY MENU] Already marked as ready.")
+                last_status_update = "You are Ready!"  # Update local status display
+
+            elif selected_option == "View Peers":
+                # Placeholder - display peer info screen (implement later)
+                draw_info_screen(stdscr, "Peer Info Placeholder", ["Coming soon..."])
+                pass
+            elif selected_option == "View Network":
+                # Placeholder - display network info screen (implement later)
+                draw_info_screen(stdscr, "Network Info Placeholder", ["Coming soon..."])
+                pass
+            elif selected_option == "Quit":
+                return None  # Signal to exit
+
+        # Small delay to prevent high CPU usage
+        time.sleep(0.05)
+
+
+def draw_info_screen(stdscr, title, lines):
+    """Helper to draw a simple info screen and wait for a key press."""
+    stdscr.clear()
+    h, w = stdscr.getmaxyx()
+    stdscr.addstr(1, (w - len(title)) // 2, title, curses.A_BOLD)
+    for i, line in enumerate(lines):
+        stdscr.addstr(3 + i, 2, line)
+    stdscr.addstr(h - 2, 2, "Press any key to return...")
+    stdscr.refresh()
+    stdscr.nodelay(False)  # Switch to blocking mode to wait for key
+    stdscr.getch()
+    stdscr.nodelay(True)  # Switch back to non-blocking
+
+
+def draw_results_screen(
+    stdscr, scores, scores_lock, player_name, expected_peers, results_received_event
+):
+    """Displays the final game results."""
+    print("[RESULTS] Drawing results screen.")
+    stdscr.clear()
+    h, w = stdscr.getmaxyx()
+    title = "=== FINAL RESULTS ==="
+    stdscr.addstr(2, (w - len(title)) // 2, title, curses.A_BOLD)
+
+    # Wait briefly for results to potentially arrive
+    results_received_event.wait(timeout=2.0)
+
+    with scores_lock:
+        # Format results: "PlayerName: 120.5s (Attacks: 15->, 8<-)"
+        results_list = []
+        # Need player names - fetch from peer_boards (might be cleared, need adjustment)
+        # For now, just use peer_id if name isn't available
+        # Sorting: Higher survival time first
+        sorted_scores = sorted(
+            scores.items(), key=lambda item: float(item[1].split(":")[0]), reverse=True
+        )
+
+        for i, (peer_id, result_data) in enumerate(sorted_scores):
+            try:
+                parts = result_data.split(":")
+                survival_time = float(parts[0])
+                attacks_sent = int(parts[1]) if len(parts) > 1 else 0
+                attacks_received = int(parts[2]) if len(parts) > 2 else 0
+                # Ideally, resolve peer_id to player_name here
+                display_name = f"Peer_{i+1}"  # Placeholder name
+                line = f"{i+1}. {display_name}: {survival_time:.1f}s (Atk: {attacks_sent} S / {attacks_received} R)"
+                results_list.append(line)
+            except (ValueError, IndexError):
                 results_list.append(
-                    f"{player}: {survival_time:.1f}s (Attacks: {attacks_sent}→, {attacks_received}←)"
+                    f"{i+1}. Peer_{i+1}: Invalid score data '{result_data}'"
                 )
 
-            results_str = " | ".join(results_list)
+        for i, line in enumerate(results_list):
+            stdscr.addstr(5 + i, 4, line)
 
-            # Everyone broadcasts results to ensure all peers have them
-            net.broadcast(
-                tetris_pb2.TetrisMessage(
-                    type=tetris_pb2.GAME_RESULTS, results=results_str
-                )
+    if len(scores) < expected_peers:
+        stdscr.addstr(
+            h - 4,
+            4,
+            f"Waiting for results from other players ({len(scores)}/{expected_peers})...",
+        )
+
+    stdscr.addstr(h - 2, 4, "Returning to lobby shortly...")
+    stdscr.refresh()
+    # No getch here, let the main loop handle the delay
+
+
+# --- Network Message Processing Thread ---
+def process_network_messages(
+    net,
+    game_message_queue,
+    lobby_status_queue,
+    peer_boards,
+    peer_boards_lock,
+    scores,
+    scores_lock,
+    ready_peers_normalized,
+    ready_lock,
+    game_started_event,
+    results_received_event,
+    listen_addr,  # Own address
+):
+    """Thread function to continuously process incoming network messages."""
+    print("[NET THREAD] Started.")
+    seed_value = None  # Track locally if START received
+
+    while True:
+        try:
+            peer_id, msg = net.incoming.get(
+                timeout=1.0
+            )  # Use timeout to allow periodic checks
+            # print(f"[NET THREAD] Received {tetris_pb2.MessageType.Name(msg.type)} from {peer_id}") # Debug: Log message type
+
+            if msg.type == tetris_pb2.GAME_STATE:
+                # Update peer board state (used by renderer)
+                with peer_boards_lock:
+                    board_state = {
+                        "board": unflatten_board(
+                            msg.board_state.cells,
+                            msg.board_state.width,
+                            msg.board_state.height,
+                        ),
+                        "score": msg.board_state.score,
+                        "player_name": msg.board_state.player_name,
+                        "timestamp": time.time(),
+                    }
+                    if msg.board_state.HasField("active_piece"):
+                        board_state["active_piece"] = {
+                            "type": msg.board_state.active_piece.piece_type,
+                            "x": msg.board_state.active_piece.x,
+                            "y": msg.board_state.active_piece.y,
+                            "rotation": msg.board_state.active_piece.rotation,
+                            "color": msg.board_state.active_piece.color,
+                        }
+                    peer_boards[peer_id] = board_state
+                    # print(f"[NET THREAD] Updated board for {msg.board_state.player_name}") # Debug
+
+            elif msg.type == tetris_pb2.READY:
+                # Update ready state (used by lobby menu)
+                sender_addr = msg.sender
+                normalized_peer = net._normalize_peer_addr(sender_addr)
+                with ready_lock:
+                    if normalized_peer not in ready_peers_normalized:
+                        ready_peers_normalized.add(normalized_peer)
+                        print(
+                            f"[NET THREAD] Peer READY: {normalized_peer} ({len(ready_peers_normalized)} total)"
+                        )
+                        # Send status update to lobby UI
+                        lobby_status_queue.put(("READY", normalized_peer))
+
+            elif msg.type == tetris_pb2.START:
+                # Signal game start (used by lobby menu)
+                if not game_started_event.is_set():
+                    seed_value = msg.seed
+                    print(f"[NET THREAD] Received START, seed = {seed_value}")
+                    game_started_event.set()
+                    lobby_status_queue.put(("START", seed_value))
+
+            elif msg.type == tetris_pb2.LOSE:
+                # Store score, signal results processing
+                with scores_lock:
+                    if peer_id not in scores:
+                        survival_time = msg.score  # Integer part
+                        attacks_data = ""
+                        if hasattr(msg, "extra") and msg.extra:
+                            try:
+                                attacks_data = msg.extra.decode()  # sent:received
+                            except Exception:
+                                pass
+
+                        result_data = f"{survival_time:.2f}"  # Store float for sorting
+                        if attacks_data:
+                            result_data += f":{attacks_data}"
+
+                        scores[peer_id] = result_data
+                        print(
+                            f"[NET THREAD] Received LOSE from {peer_id}. Score data: {result_data}"
+                        )
+                        lobby_status_queue.put(("LOSE", peer_id))
+
+            elif msg.type == tetris_pb2.GAME_RESULTS:
+                # Signal results fully received (used by results screen)
+                print(f"[NET THREAD] Received GAME_RESULTS: {msg.results}")
+                results_received_event.set()
+                lobby_status_queue.put(("RESULTS", msg.results))
+
+            elif msg.type == tetris_pb2.GARBAGE:
+                # Forward GARBAGE to game logic if it's not from ourselves
+                if msg.sender != listen_addr:
+                    print(
+                        f"[NET THREAD] Received GARBAGE from {msg.sender}: {msg.garbage} lines. Queuing for game."
+                    )
+                    try:
+                        game_message_queue.put(msg)  # Pass the whole message
+                    except Exception as e:
+                        print(f"[NET THREAD] Error queueing garbage: {e}")
+                else:
+                    print(
+                        f"[NET THREAD] Ignored own GARBAGE message: {msg.garbage} lines"
+                    )
+
+        except queue.Empty:
+            # Timeout occurred, loop continues
+            pass
+        except Exception as e:
+            print(
+                f"[NET THREAD] Error processing message from {peer_id if 'peer_id' in locals() else 'UNKNOWN'}: {e}"
             )
+            import traceback
 
-            print("=== FINAL RESULTS ===")
-            print(results_str)
-            print("=====================")
-
-        while not net.incoming.empty():
-            try:
-                net.incoming.get_nowait()
-            except queue.Empty:
-                break
-
-        print("Returning to lobby for a new game...")
+            print(f"[NET THREAD] Traceback: {traceback.format_exc()}")

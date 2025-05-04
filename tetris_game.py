@@ -1,12 +1,9 @@
 import curses
-import time
 import random
 import copy
 import locale
-import queue
-import sys
 
-from proto import tetris_pb2
+
 from game.state import GameState, Piece, create_piece_generator
 from game.combo import ComboSystem
 from game.controller import GameController
@@ -680,6 +677,7 @@ class ComboSystem:
 
 # ---------------------- Main Game Loop ---------------------- #
 def run_game(
+    stdscr,
     get_next_piece,
     client_socket=None,
     net_queue=None,
@@ -689,29 +687,30 @@ def run_game(
     player_name=None,
 ):
     """Main game function that handles game loop and input/output"""
+    print("[RUN GAME] Entered.")
 
-    # --- Logging Setup ---
-    original_stdout = sys.stdout  # Save original stdout
-    log_file = open(f"game_{player_name}.log", "w")
-    sys.stdout = log_file
-    sys.stderr = log_file  # Also redirect stderr for errors
-    print("--- Starting Game Log ---")
-
-    stdscr = None  # Initialize stdscr to None
     try:
-        stdscr = curses.initscr()
+        # Ensure curses settings are appropriate for the game phase
+        stdscr.nodelay(True)  # Ensure non-blocking input for game loop
+        curses.curs_set(0)  # Ensure cursor is hidden
+        stdscr.keypad(True)  # Ensure special keys are enabled
+
         # Initialize game components
         game_state = GameState(
             0
-        )  # We'll use get_next_piece instead of the built-in generator
-        renderer = CursesRenderer(stdscr)
-        input_handler = InputHandler(stdscr)
+        )  # Seed is now managed externally, just need a placeholder
+        print("[RUN GAME] Initializing CursesRenderer...")
+        renderer = CursesRenderer(stdscr)  # Pass the existing stdscr object
+        print("[RUN GAME] Initializing InputHandler...")
+        input_handler = InputHandler(stdscr)  # Pass the existing stdscr object
 
         # Override the game's piece generator with the provided one
+        print("[RUN GAME] Setting initial pieces...")
         game_state.current_piece = get_next_piece()
         game_state.next_piece = get_next_piece()
 
         # Create the game controller and inject the get_next_piece function
+        print("[RUN GAME] Initializing GameController...")
         controller = GameController(
             game_state=game_state,
             renderer=renderer,
@@ -739,34 +738,42 @@ def run_game(
             # Render the game
             controller.render()
 
-        # If using blocking mode for final screen, switch to non-blocking again
-        # stdscr.nodelay(False) # Removed this - let curses handle cleanup
-        # stdscr.getch()  # Removed this - let curses handle cleanup
+        print("[RUN GAME] Exiting game loop.")
 
         # Return final game stats
         final_stats = controller.get_stats()
-        print(f"--- Game Ended. Final Stats: {final_stats} ---")
+        print(f"[RUN GAME] Returning final stats: {final_stats}")
         return final_stats
 
-    finally:
-        # --- Restore stdout and close log file BEFORE ending curses ---
-        print("--- Restoring stdout and closing log file ---")
-        sys.stdout = original_stdout
-        sys.stderr = original_stdout  # Restore stderr too
-        log_file.close()
+    except Exception as e:
+        # Log any exceptions that occur within the game loop specifically
+        print(f"[RUN GAME] CRITICAL ERROR: {e}")
+        import traceback
 
-        # --- Curses cleanup ---
-        if stdscr:  # Check if stdscr was initialized
-            # Reset terminal modes before ending curses
-            stdscr.keypad(False)
-            curses.echo()
-            curses.nocbreak()
-            curses.endwin()
+        print(traceback.format_exc())
+        # Re-raise the exception so the main wrapper can handle curses cleanup
+        raise
 
 
 if __name__ == "__main__":
-    seed = random.randint(0, 1000000)
-    get_next_piece = create_piece_generator(seed)
-    final_stats = run_game(get_next_piece)
-    print("Game Over!")
-    print(f"Final Stats: {final_stats}")
+    # This block is primarily for testing the game logic standalone,
+    # not the full P2P experience which runs via peer.py
+    print("Running tetris_game.py directly (standalone test mode).")
+
+    # Need to use curses.wrapper if running standalone
+    def standalone_game(stdscr):
+        print("Initializing standalone game...")
+        # Setup necessary components for standalone run
+        init_colors()  # Need colors for standalone
+        seed = random.randint(0, 1000000)
+        get_next_piece_func = create_piece_generator(seed)
+        # Run the game, passing the stdscr from the wrapper
+        final_stats = run_game(stdscr, get_next_piece_func)
+        print("Standalone game finished.")
+        print(f"Final Stats: {final_stats}")
+        print("Press any key to exit.")
+        stdscr.nodelay(False)  # Make getch blocking
+        stdscr.getch()
+
+    curses.wrapper(standalone_game)
+    print("Standalone execution complete.")
