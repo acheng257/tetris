@@ -1,3 +1,4 @@
+import hashlib
 import sys
 import select
 import random
@@ -382,7 +383,7 @@ def run_lobby_menu(
             if ready_count >= expected_peers:
                 # Generate deterministic seed
                 seed_source = ",".join(sorted(ready_peers_normalized))
-                seed = hash(seed_source) % 1000000
+                seed = int(hashlib.sha256(seed_source.encode()).hexdigest(), 16) % 1000000
                 print(
                     f"[LOBBY MENU] All peers ready ({ready_count}/{expected_peers}). Broadcasting START, seed={seed}"
                 )
