@@ -468,46 +468,62 @@ class CursesRenderer:
             except curses.error:
                 pass  # Handle potential out-of-bounds errors
 
-    def draw_game_over(
-        self, survival_time, attacks_sent, attacks_received, score, player_name
-    ):
-        """Draw the game over screen with stats"""
+    def draw_game_over(self, stats_list):
+        """Draw the final multi-player game over results screen."""
         h, w = self.stdscr.getmaxyx()
+        self.stdscr.clear()
 
-        # Show attack stats
-        attacks_msg = f"Attacks - Sent: {attacks_sent}, Received: {attacks_received}"
-        survival_msg = f"Survival Time: {int(survival_time)} seconds"
-        score_msg = f"Final Score: {score}"
-        game_over_msg = "GAME OVER! Press any key..."
-
+        title = "   --- FINAL RESULTS ---   "
         try:
-            self.stdscr.addstr(
-                h // 2 - 3,
-                max(0, (w - len(score_msg)) // 2),
-                score_msg,
-                curses.A_BOLD,
+            self.stdscr.addstr(2, (w - len(title)) // 2, title, curses.A_BOLD)
+
+            # Define column headers and approximate positions/widths
+            headers = ["Rank", "Player", "Survival", "Sent", "Received", "Score"]
+            # Adjust positions based on typical lengths
+            col_x = [4, 10, 28, 42, 50, 65]
+
+            # Draw headers
+            for idx, hdr in enumerate(headers):
+                self.stdscr.addstr(4, col_x[idx], hdr, curses.A_UNDERLINE)
+
+            # Sort stats by survival time descending before displaying
+            # The lobby should ideally pass a pre-sorted list, but we can sort here too
+            sorted_stats = sorted(
+                stats_list, key=lambda x: x.get("survival_time", 0), reverse=True
             )
-            self.stdscr.addstr(
-                h // 2 - 2,
-                max(0, (w - len(attacks_msg)) // 2),
-                attacks_msg,
-                curses.A_BOLD,
-            )
-            self.stdscr.addstr(
-                h // 2 - 1,
-                max(0, (w - len(survival_msg)) // 2),
-                survival_msg,
-                curses.A_BOLD,
-            )
-            self.stdscr.addstr(
-                h // 2,
-                max(0, (w - len(game_over_msg)) // 2),
-                game_over_msg,
-                curses.A_BOLD,
-            )
-            self.stdscr.refresh()
+
+            # Draw each player's row
+            for row_idx, stats in enumerate(sorted_stats):
+                y = 5 + row_idx
+
+                # Prepare data strings
+                rank = str(row_idx + 1)
+                name = stats.get("player_name", "Unknown")[:16]  # Truncate name
+                survival = f"{stats.get('survival_time', 0):.1f}s"
+                sent = str(stats.get("attacks_sent", 0))
+                received = str(stats.get("attacks_received", 0))
+                score_val = str(stats.get("score", 0))
+
+                # Draw columns
+                self.stdscr.addstr(y, col_x[0], rank)
+                self.stdscr.addstr(y, col_x[1], name)
+                self.stdscr.addstr(y, col_x[2], survival)
+                self.stdscr.addstr(y, col_x[3], sent)
+                self.stdscr.addstr(y, col_x[4], received)
+                self.stdscr.addstr(y, col_x[5], score_val)
+
+            footer = "Press any key to return to lobby..."
+            self.stdscr.addstr(h - 2, (w - len(footer)) // 2, footer)
+
         except curses.error:
-            pass
+            # Handle potential errors during drawing (e.g., small terminal)
+            self.stdscr.clear()
+            self.stdscr.addstr(0, 0, "Error displaying results (Terminal too small?)")
+
+        # Wait for user input before returning to lobby
+        self.stdscr.nodelay(False)  # Switch to blocking input
+        self.stdscr.getch()
+        self.stdscr.nodelay(True)  # Switch back to non-blocking
 
     def draw_pending_garbage_indicator(self, pending_garbage_amount):
         """Draw the pending garbage indicator bar on the right side."""

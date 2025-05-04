@@ -8,6 +8,7 @@ import threading
 import socket
 import curses
 from proto import tetris_pb2
+from ui.curses_renderer import CursesRenderer
 from peer.grpc_peer import P2PNetwork
 from tetris_game import create_piece_generator, run_game, init_colors
 
@@ -206,14 +207,12 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
                             print(
                                 f"[PeerSocketAdapter] Broadcasting GARBAGE: {n} lines"
                             )
+                            # Broadcast protobuf message with player_name as sender
                             net.broadcast(
                                 tetris_pb2.TetrisMessage(
                                     type=tetris_pb2.GARBAGE,
                                     garbage=n,
-                                    sender=listen_addr,
-                                    extra=(
-                                        player_name.encode() if player_name else b""
-                                    ),
+                                    sender=player_name,
                                 )
                             )
                     except ValueError:
@@ -228,11 +227,15 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
                             print(
                                 f"[PeerSocketAdapter] Broadcasting LOSE: time={survival_time_float}, sent={attacks_sent_int}, rcvd={attacks_received_int}"
                             )
+
                             net.broadcast(
                                 tetris_pb2.TetrisMessage(
                                     type=tetris_pb2.LOSE,
-                                    score=int(survival_time_float),
-                                    extra=f"{attacks_sent_int}:{attacks_received_int}".encode(),
+                                    sender=player_name,
+                                    score=int(
+                                        survival_time_float
+                                    ),  # Survival time in score field
+                                    extra=f"{attacks_sent_int}:{attacks_received_int}".encode(),  # Stats in extra
                                 )
                             )
                         else:
@@ -306,26 +309,58 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
             peer_boards_lock,
             player_name,
         )
+
+        # Instantiate the renderer here to pass it down
+        renderer = CursesRenderer(stdscr)
+
         print(f"[LOBBY UI] Game finished for {player_name}. Final score: {final_score}")
 
-        # --- Post-Game Results Handling (Simplified Placeholder) ---
         # Broadcast our LOSE message one last time in case it was missed
         net.broadcast(
             tetris_pb2.TetrisMessage(
                 type=tetris_pb2.LOSE,
+                sender=player_name,
                 score=int(final_score["survival_time"]),
                 extra=f"{final_score['attacks_sent']}:{final_score['attacks_received']}".encode(),
             )
         )
 
-        # Display results screen (basic version)
+        # Store our own result under our username
+        with scores_lock:
+            scores[player_name] = (
+                f"{final_score['survival_time']:.2f}"
+                f":{final_score['attacks_sent']}"
+                f":{final_score['attacks_received']}"
+            )
+
+        # Wait until all results are received (or timeout)
+        print("[LOBBY UI] Waiting for all player results...")
+        wait_start_time = time.time()
+        while True:
+            with scores_lock:
+                if len(scores) >= expected_peers:
+                    print("[LOBBY UI] All results received.")
+                    break
+            if time.time() - wait_start_time > 10.0:  # 10 second timeout
+                print("[LOBBY UI] Timeout waiting for results.")
+                break
+            # Briefly show a "waiting" message
+            stdscr.clear()
+            msg = f"Game Over! Waiting for results ({len(scores)}/{expected_peers})..."
+            h, w = stdscr.getmaxyx()
+            stdscr.addstr(h // 2, (w - len(msg)) // 2, msg)
+            stdscr.refresh()
+            time.sleep(0.2)
+
+        # Draw the consolidated results screen
         draw_results_screen(
             stdscr,
             scores,
             scores_lock,
-            player_name,
+            player_name,  # Keep player_name for context if needed, but scores dict is primary source
             expected_peers,
-            results_received_event,
+            results_received_event,  # Keep event if needed elsewhere, but primary wait is in wrapper now
+            renderer,  # Pass the renderer instance
         )
 
         # Wait a bit before returning to lobby
@@ -514,56 +549,62 @@ def draw_info_screen(stdscr, title, lines):
 
 
 def draw_results_screen(
-    stdscr, scores, scores_lock, player_name, expected_peers, results_received_event
+    stdscr,
+    scores,
+    scores_lock,
+    player_name,  # Keep player_name for context if needed, but scores dict is primary source
+    expected_peers,
+    results_received_event,
+    renderer,  # Receive the CursesRenderer instance
 ):
-    """Displays the final game results."""
-    print("[RESULTS] Drawing results screen.")
+    """Prepares final stats and calls the renderer to display them."""
+    print("[RESULTS] Preparing results data.")
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     title = "=== FINAL RESULTS ==="
     stdscr.addstr(2, (w - len(title)) // 2, title, curses.A_BOLD)
 
-    # Wait briefly for results to potentially arrive
-    results_received_event.wait(timeout=2.0)
+    # Results should be fully gathered by now by the caller loop
+    # Helper to parse "time:sent:received" string from scores dictionary
+    def parse_score_data(val):
+        try:
+            parts = val.split(":")
+            if len(parts) == 3:
+                return float(parts[0]), int(parts[1]), int(parts[2])
+        except (ValueError, IndexError, TypeError):
+            print(f"[RESULTS] Error parsing score data: {val}")
+        return 0.0, 0, 0  # Default on error
 
     with scores_lock:
-        # Format results: "PlayerName: 120.5s (Attacks: 15->, 8<-)"
-        results_list = []
-        # Need player names - fetch from peer_boards (might be cleared, need adjustment)
-        # For now, just use peer_id if name isn't available
-        # Sorting: Higher survival time first
-        sorted_scores = sorted(
-            scores.items(), key=lambda item: float(item[1].split(":")[0]), reverse=True
+        # Sort by survival time descending using the helper
+        sorted_list = sorted(
+            scores.items(),
+            key=lambda kv: parse_score_data(kv[1])[
+                0
+            ],  # Sort by survival time (index 0)
+            reverse=True,
         )
 
-        for i, (peer_id, result_data) in enumerate(sorted_scores):
-            try:
-                parts = result_data.split(":")
-                survival_time = float(parts[0])
-                attacks_sent = int(parts[1]) if len(parts) > 1 else 0
-                attacks_received = int(parts[2]) if len(parts) > 2 else 0
-                # Ideally, resolve peer_id to player_name here
-                display_name = f"Peer_{i+1}"  # Placeholder name
-                line = f"{i+1}. {display_name}: {survival_time:.1f}s (Atk: {attacks_sent} S / {attacks_received} R)"
-                results_list.append(line)
-            except (ValueError, IndexError):
-                results_list.append(
-                    f"{i+1}. Peer_{i+1}: Invalid score data '{result_data}'"
-                )
+        results_for_renderer = []
+        # Prepare data for the renderer's draw_game_over
+        for idx, (name, data) in enumerate(sorted_list):
+            surv, sent, recv = parse_score_data(data)
+            score_value = int(surv * 10)  # Example score calculation (adjust if needed)
+            results_for_renderer.append(
+                {
+                    "player_name": name,
+                    "survival_time": surv,
+                    "attacks_sent": sent,
+                    "attacks_received": recv,
+                    "score": score_value,  # Pass a calculated score
+                }
+            )
 
-        for i, line in enumerate(results_list):
-            stdscr.addstr(5 + i, 4, line)
-
-    if len(scores) < expected_peers:
-        stdscr.addstr(
-            h - 4,
-            4,
-            f"Waiting for results from other players ({len(scores)}/{expected_peers})...",
-        )
-
-    stdscr.addstr(h - 2, 4, "Returning to lobby shortly...")
-    stdscr.refresh()
-    # No getch here, let the main loop handle the delay
+    # Call the actual renderer method to draw the game over screen
+    print(
+        f"[RESULTS] Passing {len(results_for_renderer)} results to renderer.draw_game_over"
+    )
+    renderer.draw_game_over(results_for_renderer)
 
 
 # --- Network Message Processing Thread ---
@@ -639,26 +680,44 @@ def process_network_messages(
                     lobby_status_queue.put(("START", seed_value))
 
             elif msg.type == tetris_pb2.LOSE:
-                # Store score, signal results processing
+                # Use the username the peer set in `sender`
+                peer_name = (
+                    msg.sender or peer_id
+                )  # Fallback to peer_id if sender is empty
+                if not peer_name:  # Skip if we can't identify the sender
+                    print("[NET THREAD] Received LOSE without sender name, skipping.")
+                    continue
+
                 with scores_lock:
-                    if peer_id not in scores:
-                        survival_time = msg.score  # Integer part
-                        attacks_data = ""
+                    if peer_name not in scores:
+                        # survival time is in msg.score field
+                        survival_time = float(msg.score) if msg.score else 0.0
+                        # attacks data was packed into msg.extra as "sent:received"
+                        attacks_sent = 0
+                        attacks_received = 0
                         if hasattr(msg, "extra") and msg.extra:
                             try:
-                                attacks_data = msg.extra.decode()  # sent:received
-                            except Exception:
-                                pass
+                                extra_data = msg.extra.decode()
+                                parts = extra_data.split(":")
+                                if len(parts) == 2:
+                                    attacks_sent = int(parts[0])
+                                    attacks_received = int(parts[1])
+                            except Exception as e:
+                                print(
+                                    f"[NET THREAD] Error parsing LOSE extra data '{msg.extra}': {e}"
+                                )
 
-                        result_data = f"{survival_time:.2f}"  # Store float for sorting
-                        if attacks_data:
-                            result_data += f":{attacks_data}"
-
-                        scores[peer_id] = result_data
-                        print(
-                            f"[NET THREAD] Received LOSE from {peer_id}. Score data: {result_data}"
+                        # Store "time:sent:received" string in scores dict
+                        result_data = (
+                            f"{survival_time:.2f}:{attacks_sent}:{attacks_received}"
                         )
-                        lobby_status_queue.put(("LOSE", peer_id))
+                        scores[peer_name] = result_data
+                        print(
+                            f"[NET THREAD] Received LOSE from {peer_name}. Score data: {result_data}"
+                        )
+                        lobby_status_queue.put(
+                            ("LOSE", peer_name)
+                        )  # Signal lobby UI if needed
 
             elif msg.type == tetris_pb2.GAME_RESULTS:
                 # Signal results fully received (used by results screen)

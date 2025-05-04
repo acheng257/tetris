@@ -1,6 +1,7 @@
 import time
 import curses
 import queue
+from proto import tetris_pb2
 from typing import Dict, Any, Optional, Tuple
 
 from game.state import Piece
@@ -71,24 +72,12 @@ class GameController:
         if self.net_queue is None:
             return
 
-        current_time = time.time()
-
         try:
             while True:
                 net_msg = self.net_queue.get_nowait()
-                if isinstance(net_msg, str) and net_msg.startswith("GARBAGE:"):
-                    try:
-                        garbage_amount = int(net_msg.split(":", 1)[1].strip())
-                        print(
-                            f"[NET GARBAGE] Received string GARBAGE message: {garbage_amount} lines"
-                        )
-                        self.game_state.queue_garbage(garbage_amount)
-                        self.attacks_received += garbage_amount
-                        # Don't immediately render here, queue it first
-                    except ValueError:
-                        pass
-                elif (
+                if (
                     hasattr(net_msg, "type")
+                    and net_msg.type == tetris_pb2.GARBAGE
                     and hasattr(net_msg, "garbage")
                     and net_msg.garbage > 0
                 ):
@@ -99,9 +88,9 @@ class GameController:
                         print(
                             f"[NET GARBAGE] Received protobuf GARBAGE message: {garbage_amount} lines from {sender_info}"
                         )
+                        # Queue garbage in game state
                         self.game_state.queue_garbage(garbage_amount)
                         self.attacks_received += garbage_amount
-                        # Don't immediately render here
                     except Exception as e:
                         print(f"[NET GARBAGE] Error processing protobuf GARBAGE: {e}")
         except queue.Empty:
@@ -300,36 +289,15 @@ class GameController:
             self._handle_game_over()
 
     def _handle_game_over(self):
-        """Handle game over state"""
+        """Handle game over: calculate final stats, send LOSE message, return stats."""
         # Calculate final survival time
         self.survival_time = time.time() - self.start_time
 
-        # Draw the final game state
-        self.renderer.draw_board(
-            self.game_state.board,
-            self.score,
-            self.level,
-            self.combo_system.get_display(),
-            self.player_name,
-        )
-
-        # Show game over screen
-        self.renderer.draw_game_over(
-            self.survival_time,
-            self.attacks_sent,
-            self.attacks_received,
-            self.score,
-            self.player_name,
-        )
-
-        # Broadcast your LOSE using the adapter’s counters
+        # Send LOSE message via adapter (includes final stats)
         if self.client_socket:
             try:
-                sent = getattr(self.client_socket, "attacks_sent", self.attacks_sent)
-                recv = getattr(
-                    self.client_socket, "attacks_received", self.attacks_received
-                )
-                msg = f"LOSE:{self.survival_time:.2f}:{sent}:{recv}\n"
+                msg = f"LOSE:{self.survival_time:.2f}:{self.attacks_sent}:{self.attacks_received}"
+                print(f"[CONTROLLER] Sending final LOSE message: {msg}")
                 self.client_socket.sendall(msg.encode())
             except Exception as e:
                 print(f"Error sending LOSE message: {e}")
@@ -445,7 +413,7 @@ class GameController:
         return None
 
     def render(self):
-        """Render the current game state"""
+        """Render the current game state (board, pieces, info, peers)"""
         current_time = time.time()
 
         # Render the board
