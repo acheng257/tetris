@@ -322,12 +322,15 @@ class GameController:
             self.player_name,
         )
 
-        # Send game over message to network
+        # Broadcast your LOSE using the adapter’s counters
         if self.client_socket:
             try:
-                self.client_socket.sendall(
-                    f"LOSE:{self.survival_time:.2f}:{self.attacks_sent}:{self.attacks_received}\n".encode()
+                sent = getattr(self.client_socket, "attacks_sent", self.attacks_sent)
+                recv = getattr(
+                    self.client_socket, "attacks_received", self.attacks_received
                 )
+                msg = f"LOSE:{self.survival_time:.2f}:{sent}:{recv}\n"
+                self.client_socket.sendall(msg.encode())
             except Exception as e:
                 print(f"Error sending LOSE message: {e}")
 
