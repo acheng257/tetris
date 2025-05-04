@@ -345,6 +345,23 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
         # Wait a bit before returning to lobby
         time.sleep(5)
 
+        # net.incoming.queue.clear()
+        # lobby_status_queue.queue.clear()
+        reset_lobby_state(
+            net,
+            ready_peers_normalized, ready_lock,
+            scores, scores_lock,
+            peer_boards, peer_boards_lock,
+            game_started_event, results_received_event,
+            lobby_status_queue
+        )
+
+    # Reset curses terminal completely
+    curses.endwin()
+    stdscr.clear()
+    stdscr.refresh()
+    curses.doupdate()
+
 
 def draw_personal_results_screen(stdscr, stats, name):
     stdscr.clear()
@@ -376,6 +393,18 @@ def run_lobby_menu(
     all_addrs,
 ):
     """Displays the lobby menu, handles input, and waits for game start."""
+    curses.flushinp()
+
+    temp_events = []
+    try:
+        while True:
+            ev = lobby_status_queue.get_nowait()
+            if ev[0] != "LOSE":
+                temp_events.append(ev)
+    except queue.Empty:
+        pass
+    for ev in temp_events:
+        lobby_status_queue.put(ev)
     print("[LOBBY MENU] Entered.")
 
     menu_options = ["Ready", "View Peers", "View Network", "Quit"]
@@ -385,6 +414,9 @@ def run_lobby_menu(
 
     # Determine the leader based on the sorted canonical address list
     # Normalize addresses first for consistent comparison
+    with net.lock:
+        current_peers = list(net.unique_peers)
+    all_addrs = sorted(set(current_peers + all_addrs))  # Merge initial 
     normalized_addrs = sorted([net._get_peer_identity(addr) for addr in all_addrs])
     leader_identity = normalized_addrs[0] if normalized_addrs else None
     my_identity = net._get_peer_identity(listen_addr)
@@ -406,6 +438,10 @@ def run_lobby_menu(
                 )
 
     while True:
+        normalized_addrs = sorted([net._get_peer_identity(addr) for addr in all_addrs])
+        leader_identity = normalized_addrs[0] if normalized_addrs else None
+        my_identity = net._get_peer_identity(listen_addr)
+        is_leader = my_identity == leader_identity
         # --- Process Network Updates for UI ---
         try:
             status_update = lobby_status_queue.get_nowait()
@@ -451,32 +487,52 @@ def run_lobby_menu(
                 )
                 game_started_event.set()  # Signal game start
                 return {"seed": calculated_seed}
+        with net.lock:
+            peers_connected = len(net.out_queues) + len(net.unique_peers)
 
         # --- Draw Menu ---
+        # stdscr.clear()
+        # h, w = stdscr.getmaxyx()
+
+        # title = f"P2P Tetris Lobby - Player: {player_name}"
+        # stdscr.addstr(1, (w - len(title)) // 2, title, curses.A_BOLD)
+
+        # # Display ready status
+        # with ready_lock:
+        #     ready_count = len(ready_peers_normalized)
+        # status_line = (
+        #     f"Status: Waiting for players ({ready_count}/{expected_peers} ready)"
+        # )
+        # stdscr.addstr(3, 2, status_line)
+        # stdscr.addstr(4, 2, last_status_update)  # Display last network event info
+
+        # # Draw menu options
+        # for i, option in enumerate(menu_options):
+        #     y = 6 + i
+        #     x = 5
+        #     if i == current_selection:
+        #         stdscr.addstr(y, x, f"> {option}", curses.A_REVERSE)
+        #     else:
+        #         stdscr.addstr(y, x, f"  {option}")
+
+        # stdscr.refresh()
         stdscr.clear()
         h, w = stdscr.getmaxyx()
+        title = f"P2P Tetris Lobby - {player_name}"
+        stdscr.addstr(1, (w-len(title))//2, title, curses.A_BOLD)
+        stdscr.addstr(3, 2, f"Status: {ready_count}/{expected_peers} ready")
+        stdscr.addstr(4, 2, last_status_update)
 
-        title = f"P2P Tetris Lobby - Player: {player_name}"
-        stdscr.addstr(1, (w - len(title)) // 2, title, curses.A_BOLD)
-
-        # Display ready status
-        with ready_lock:
-            ready_count = len(ready_peers_normalized)
-        status_line = (
-            f"Status: Waiting for players ({ready_count}/{expected_peers} ready)"
-        )
-        stdscr.addstr(3, 2, status_line)
-        stdscr.addstr(4, 2, last_status_update)  # Display last network event info
-
-        # Draw menu options
-        for i, option in enumerate(menu_options):
-            y = 6 + i
-            x = 5
-            if i == current_selection:
-                stdscr.addstr(y, x, f"> {option}", curses.A_REVERSE)
-            else:
-                stdscr.addstr(y, x, f"  {option}")
-
+        can_ready = (peers_connected >= expected_peers)
+        for i,opt in enumerate(menu_options):
+            label = opt
+            attr  = curses.A_NORMAL
+            if opt=="Ready" and not can_ready:
+                label = "Ready (waiting for network…)"
+                attr |= curses.A_DIM
+            if i==current_selection:
+                attr |= curses.A_REVERSE
+            stdscr.addstr(6+i, 5, f"{'> ' if i==current_selection else '  '}{label}", attr)
         stdscr.refresh()
 
         # --- Handle Input ---
@@ -505,7 +561,7 @@ def run_lobby_menu(
                         print(f"[LOBBY MENU] Sending READY message for {my_identity}")
                         net.broadcast(
                             tetris_pb2.TetrisMessage(
-                                type=tetris_pb2.READY, sender=listen_addr
+                                type=tetris_pb2.READY, sender=my_identity
                             )
                         )
                     else:
@@ -643,6 +699,8 @@ def process_network_messages(
                     # print(f"[NET THREAD] Updated board for {msg.board_state.player_name}") # Debug
 
             elif msg.type == tetris_pb2.READY:
+                if game_started_event.is_set():
+                    continue
                 # Update ready state (used by lobby menu)
                 sender_addr = msg.sender
                 normalized_peer = net._normalize_peer_addr(sender_addr)
@@ -812,3 +870,20 @@ def draw_network_info(stdscr, net, all_addrs):
     stdscr.nodelay(False)  # Wait for key
     stdscr.getch()
     stdscr.nodelay(True)  # Restore non-blocking
+
+def reset_lobby_state(net, ready_peers_normalized, ready_lock, scores, scores_lock, 
+                     peer_boards, peer_boards_lock, game_started_event, 
+                     results_received_event, lobby_status_queue):
+    """Reset all lobby state to initial values"""
+    with ready_lock:
+        ready_peers_normalized.clear()
+    with scores_lock:
+        scores.clear()
+    with peer_boards_lock:
+        peer_boards.clear()
+    game_started_event.clear()
+    results_received_event.clear()
+    # Clear network queues
+    net.incoming.queue.clear()
+    lobby_status_queue.queue.clear()
+

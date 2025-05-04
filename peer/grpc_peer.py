@@ -1,3 +1,4 @@
+import random
 import threading
 import queue
 import grpc
@@ -28,6 +29,12 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         self.persistent_peers = set()
         # Reconnection timers
         self.reconnect_timers = {}
+        # self._is_first_game = True
+        # # Modify port selection:
+        # if not self._is_first_game:
+        #     self.listen_port = random.randint(10000, 50000)
+        #     listen_addr = f"[::]:{self.listen_port}"
+        # self._is_first_game = False
 
         try:
             _, port_str = listen_addr.rsplit(":", 1)
@@ -62,6 +69,18 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
 
             # Try to connect to this peer
             self._connect_to_peer(addr)
+
+    def reconnect(self):
+        """Reconnect to all persistent peers"""
+        with self.lock:
+            # Clear existing connections
+            self.out_queues.clear()
+            self.unique_peers.clear()
+            
+        # Reconnect using original peer list
+        for addr in self.persistent_peers:
+            self._connect_to_peer(addr)
+
 
     def _get_my_ip_addresses(self):
         """Get all IP addresses of this machine for better self-connection detection"""
@@ -116,6 +135,10 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
 
     def _connect_to_peer(self, addr):
         """Connect to a peer at the given address"""
+        if any(self._get_peer_identity(a) == self._get_peer_identity(addr) 
+            for a in self.out_queues):
+            return  # Prevent duplicate connections
+
         try:
             peer_identity = self._get_peer_identity(addr)
 
@@ -298,6 +321,8 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
 
         Normalized identity format should be host:port, with special handling for localhost
         """
+        if "localhost" in addr or "127.0.0.1" in addr:
+            return addr.lower()  # Keep port for localhost uniqueness
         try:
             # Handle URL-encoded characters (from gRPC representation)
             if "%5B" in addr:  # URL-encoded '['
