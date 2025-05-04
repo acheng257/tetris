@@ -692,7 +692,7 @@ def run_game(
 
     # --- Logging Setup ---
     original_stdout = sys.stdout  # Save original stdout
-    log_file = open(f"game.log_{player_name}", "w")
+    log_file = open(f"game_{player_name}.log", "w")
     sys.stdout = log_file
     sys.stderr = log_file  # Also redirect stderr for errors
     print("--- Starting Game Log ---")
