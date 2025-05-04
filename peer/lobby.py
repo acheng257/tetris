@@ -12,6 +12,8 @@ from ui.curses_renderer import CursesRenderer
 from peer.grpc_peer import P2PNetwork
 from tetris_game import create_piece_generator, run_game, init_colors
 
+MAX_GAME_TIME = 120.0
+
 
 def flatten_board(board):
     """Convert 2D board array to flattened array for protobuf message"""
@@ -220,12 +222,13 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
                 elif s.startswith("LOSE:"):
                     try:
                         parts = s.split(":")
-                        if len(parts) >= 4:
+                        if len(parts) >= 5:
                             survival_time_float = float(parts[1])
                             attacks_sent_int = int(parts[2])
                             attacks_received_int = int(parts[3])
+                            final_score_int = int(parts[4])
                             print(
-                                f"[PeerSocketAdapter] Broadcasting LOSE: time={survival_time_float}, sent={attacks_sent_int}, rcvd={attacks_received_int}"
+                                f"[PeerSocketAdapter] Broadcasting LOSE: time={survival_time_float}, sent={attacks_sent_int}, rcvd={attacks_received_int}, score={final_score_int}"
                             )
 
                             net.broadcast(
@@ -234,8 +237,8 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
                                     sender=player_name,
                                     score=int(
                                         survival_time_float
-                                    ),  # Survival time in score field
-                                    extra=f"{attacks_sent_int}:{attacks_received_int}".encode(),  # Stats in extra
+                                    ),  # Survival time still in score field for sorting compatibility
+                                    extra=f"{attacks_sent_int}:{attacks_received_int}:{final_score_int}".encode(),
                                 )
                             )
                         else:
@@ -321,7 +324,7 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
                 type=tetris_pb2.LOSE,
                 sender=player_name,
                 score=int(final_score["survival_time"]),
-                extra=f"{final_score['attacks_sent']}:{final_score['attacks_received']}".encode(),
+                extra=f"{final_score['attacks_sent']}:{final_score['attacks_received']}:{final_score['score']}".encode(),
             )
         )
 
@@ -331,6 +334,7 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
                 f"{final_score['survival_time']:.2f}"
                 f":{final_score['attacks_sent']}"
                 f":{final_score['attacks_received']}"
+                f":{final_score['score']}"
             )
 
         # Wait until all results are received (or timeout)
@@ -338,18 +342,26 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
         wait_start_time = time.time()
         while True:
             with scores_lock:
-                if len(scores) >= expected_peers:
-                    print("[LOBBY UI] All results received.")
+                current_score_count = len(scores)
+                if current_score_count >= expected_peers:
+                    print(
+                        f"[LOBBY UI] All results received ({current_score_count}/{expected_peers})."
+                    )
                     break
-            if time.time() - wait_start_time > 10.0:  # 10 second timeout
-                print("[LOBBY UI] Timeout waiting for results.")
+            if time.time() - wait_start_time > MAX_GAME_TIME:  # Max game time
+                print(
+                    f"[LOBBY UI] Timeout waiting for results ({current_score_count}/{expected_peers})."
+                )
                 break
             # Briefly show a "waiting" message
             stdscr.clear()
-            msg = f"Game Over! Waiting for results ({len(scores)}/{expected_peers})..."
-            h, w = stdscr.getmaxyx()
-            stdscr.addstr(h // 2, (w - len(msg)) // 2, msg)
-            stdscr.refresh()
+            msg = f"Game Over! Waiting for results ({current_score_count}/{expected_peers})..."
+            try:
+                h, w = stdscr.getmaxyx()
+                stdscr.addstr(h // 2, max(0, (w - len(msg)) // 2), msg)
+                stdscr.refresh()
+            except curses.error:
+                pass
             time.sleep(0.2)
 
         # Draw the consolidated results screen
@@ -569,11 +581,11 @@ def draw_results_screen(
     def parse_score_data(val):
         try:
             parts = val.split(":")
-            if len(parts) == 3:
-                return float(parts[0]), int(parts[1]), int(parts[2])
+            if len(parts) == 4:
+                return float(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])
         except (ValueError, IndexError, TypeError):
             print(f"[RESULTS] Error parsing score data: {val}")
-        return 0.0, 0, 0  # Default on error
+        return 0.0, 0, 0, 0
 
     with scores_lock:
         # Sort by survival time descending using the helper
@@ -588,15 +600,14 @@ def draw_results_screen(
         results_for_renderer = []
         # Prepare data for the renderer's draw_game_over
         for idx, (name, data) in enumerate(sorted_list):
-            surv, sent, recv = parse_score_data(data)
-            score_value = int(surv * 10)  # Example score calculation (adjust if needed)
+            surv, sent, recv, actual_score = parse_score_data(data)
             results_for_renderer.append(
                 {
                     "player_name": name,
                     "survival_time": surv,
                     "attacks_sent": sent,
                     "attacks_received": recv,
-                    "score": score_value,  # Pass a calculated score
+                    "score": actual_score,
                 }
             )
 
@@ -692,25 +703,25 @@ def process_network_messages(
                     if peer_name not in scores:
                         # survival time is in msg.score field
                         survival_time = float(msg.score) if msg.score else 0.0
-                        # attacks data was packed into msg.extra as "sent:received"
+                        # attacks data was packed into msg.extra as "sent:received:score"
                         attacks_sent = 0
                         attacks_received = 0
+                        final_score = 0
                         if hasattr(msg, "extra") and msg.extra:
                             try:
                                 extra_data = msg.extra.decode()
                                 parts = extra_data.split(":")
-                                if len(parts) == 2:
+                                if len(parts) == 3:
                                     attacks_sent = int(parts[0])
                                     attacks_received = int(parts[1])
+                                    final_score = int(parts[2])
                             except Exception as e:
                                 print(
                                     f"[NET THREAD] Error parsing LOSE extra data '{msg.extra}': {e}"
                                 )
 
-                        # Store "time:sent:received" string in scores dict
-                        result_data = (
-                            f"{survival_time:.2f}:{attacks_sent}:{attacks_received}"
-                        )
+                        # Store "time:sent:received:score" string in scores dict
+                        result_data = f"{survival_time:.2f}:{attacks_sent}:{attacks_received}:{final_score}"
                         scores[peer_name] = result_data
                         print(
                             f"[NET THREAD] Received LOSE from {peer_name}. Score data: {result_data}"

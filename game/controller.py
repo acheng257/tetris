@@ -296,7 +296,7 @@ class GameController:
         # Send LOSE message via adapter (includes final stats)
         if self.client_socket:
             try:
-                msg = f"LOSE:{self.survival_time:.2f}:{self.attacks_sent}:{self.attacks_received}"
+                msg = f"LOSE:{self.survival_time:.2f}:{self.attacks_sent}:{self.attacks_received}:{self.score}"
                 print(f"[CONTROLLER] Sending final LOSE message: {msg}")
                 self.client_socket.sendall(msg.encode())
             except Exception as e:
