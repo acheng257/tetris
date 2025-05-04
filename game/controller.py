@@ -25,6 +25,7 @@ class GameController:
         peer_boards=None,
         peer_boards_lock=None,
         player_name=None,
+        debug_mode=False,
     ):
         self.game_state = game_state
         self.renderer = renderer
@@ -67,6 +68,9 @@ class GameController:
         self.last_board_update_time = time.time()
         self.board_update_interval = 0.5
 
+        # Store debug mode
+        self.debug_mode = debug_mode
+
     def process_network_messages(self):
         """Process incoming network messages"""
         if self.net_queue is None:
@@ -85,9 +89,10 @@ class GameController:
                     try:
                         garbage_amount = net_msg.garbage
                         sender_info = getattr(net_msg, "sender", "")
-                        print(
-                            f"[NET GARBAGE] Received protobuf GARBAGE message: {garbage_amount} lines from {sender_info}"
-                        )
+                        if self.debug_mode:
+                            print(
+                                f"[NET GARBAGE] Received protobuf GARBAGE message: {garbage_amount} lines from {sender_info}"
+                            )
                         # Queue garbage in game state
                         self.game_state.queue_garbage(garbage_amount)
                         self.attacks_received += garbage_amount
@@ -206,9 +211,10 @@ class GameController:
 
         # Calculate attack/garbage sent based *only* on the line clear type
         base_attack = self._get_attack_value(lines_cleared)
-        print(
-            f"[ATTACK CALC] Lines Cleared: {lines_cleared}, Base Attack: {base_attack}"
-        )
+        if self.debug_mode:
+            print(
+                f"[ATTACK CALC] Lines Cleared: {lines_cleared}, Base Attack: {base_attack}"
+            )
 
         # Calculate combo bonus garbage separately (Jstris combo table)
         combo_bonus_garbage = 0
@@ -232,18 +238,21 @@ class GameController:
             # Send the remaining attack (if any) after cancelling
             net_attack_sent = attack_sent - cancelled_garbage
             if net_attack_sent > 0:
-                print(
-                    f"[ATTACK SEND] Calculated Net Attack: {net_attack_sent} (Attack: {attack_sent}, Cancelled: {cancelled_garbage})"
-                )
+                if self.debug_mode:
+                    print(
+                        f"[ATTACK SEND] Calculated Net Attack: {net_attack_sent} (Attack: {attack_sent}, Cancelled: {cancelled_garbage})"
+                    )
                 self._send_garbage_to_opponents(net_attack_sent)
-            print(
-                f"[ATTACK] Cleared {lines_cleared}. Attack: {attack_sent}, Cancelled: {cancelled_garbage}, Sent: {net_attack_sent}"
-            )
+                if self.debug_mode:
+                    print(
+                        f"[ATTACK] Cleared {lines_cleared}. Attack: {attack_sent}, Cancelled: {cancelled_garbage}, Sent: {net_attack_sent}"
+                    )
         else:
             # No lines cleared: Apply pending garbage from queue
-            print(
-                f"[GARBAGE APPLY CHECK] Locking piece, lines_cleared=0. Pending garbage: {self.game_state.pending_garbage}"
-            )
+            if self.debug_mode:
+                print(
+                    f"[GARBAGE APPLY CHECK] Locking piece, lines_cleared=0. Pending garbage: {self.game_state.pending_garbage}"
+                )
             applied_garbage = self.game_state.apply_pending_garbage()
 
         # Calculate score
@@ -256,7 +265,8 @@ class GameController:
     def _send_garbage_to_opponents(self, garbage_amount):
         """Send a specific amount of garbage lines to opponents."""
         if self.client_socket and garbage_amount > 0:
-            print(f"[SEND GARBAGE] Attempting to send {garbage_amount} lines.")
+            if self.debug_mode:
+                print(f"[SEND GARBAGE] Attempting to send {garbage_amount} lines.")
             # BROADCAST garbage for now instead of targeting lowest score
             # This makes testing easier and is common in many Tetris versions
             try:
@@ -264,13 +274,15 @@ class GameController:
                     f"GARBAGE:{garbage_amount}\n".encode(),
                 )
                 self.attacks_sent += garbage_amount
-                print(
-                    f"[SEND GARBAGE] Successfully broadcast {garbage_amount} lines. Total sent: {self.attacks_sent}"
-                )
+                if self.debug_mode:
+                    print(
+                        f"[SEND GARBAGE] Successfully broadcast {garbage_amount} lines. Total sent: {self.attacks_sent}"
+                    )
             except Exception as e:
                 print(f"[ERROR] Failed to broadcast garbage: {e}")
         elif garbage_amount <= 0:
-            print(f"[SEND GARBAGE] No garbage to send ({garbage_amount}).")
+            if self.debug_mode:
+                print(f"[SEND GARBAGE] No garbage to send ({garbage_amount}).")
 
     def _spawn_next_piece(self):
         """Spawn the next piece and handle game over if needed"""
@@ -285,7 +297,8 @@ class GameController:
 
         # Check for game over
         if self.game_state.is_game_over():
-            print("[SPAWN DEBUG] Game over detected, calling _handle_game_over")
+            if self.debug_mode:
+                print("[SPAWN DEBUG] Game over detected, calling _handle_game_over")
             self._handle_game_over()
 
     def _handle_game_over(self):
@@ -297,7 +310,8 @@ class GameController:
         if self.client_socket:
             try:
                 msg = f"LOSE:{self.survival_time:.2f}:{self.attacks_sent}:{self.attacks_received}:{self.score}"
-                print(f"[CONTROLLER] Sending final LOSE message: {msg}")
+                if self.debug_mode:
+                    print(f"[CONTROLLER] Sending final LOSE message: {msg}")
                 self.client_socket.sendall(msg.encode())
             except Exception as e:
                 print(f"Error sending LOSE message: {e}")
@@ -425,7 +439,7 @@ class GameController:
             self.player_name,
         ):
             # If rendering failed (e.g., terminal too small), wait and continue
-            time.sleep(1)
+            # time.sleep(1)
             return
 
         # Render other elements

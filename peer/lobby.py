@@ -76,17 +76,22 @@ def extract_ip(peer_id):
     return peer_id.lower()
 
 
-def run_lobby_ui_and_game(listen_port, peer_addrs, player_name):
+def run_lobby_ui_and_game(listen_port, peer_addrs, player_name, debug_mode=False):
     """Top-level function to initialize curses and run lobby/game."""
     # curses.wrapper handles initscr, cleanup, and terminal restoration
     print("[LOBBY] Starting curses wrapper...")
-    curses.wrapper(_run_lobby_ui_wrapper, listen_port, peer_addrs, player_name)
+    curses.wrapper(
+        _run_lobby_ui_wrapper, listen_port, peer_addrs, player_name, debug_mode
+    )
     print("[LOBBY] Curses wrapper finished.")
 
 
-def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
+def _run_lobby_ui_wrapper(
+    stdscr, listen_port, peer_addrs, player_name, debug_mode=False
+):
     """Main function called by curses.wrapper. Handles UI and game flow."""
-    print("[LOBBY UI] Inside curses wrapper.")
+    if debug_mode:
+        print("[LOBBY UI] Inside curses wrapper.")
 
     # Initialize curses settings within the wrapper
     stdscr.nodelay(True)  # Non-blocking input
@@ -95,12 +100,14 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
     init_colors()  # Initialize color pairs (function assumed to be in tetris_game or ui module)
 
     listen_addr = f"[::]:{listen_port}"
-    print(f"[LOBBY UI] Setting up P2P Network on {listen_addr} for {player_name}")
-    net = P2PNetwork(listen_addr, peer_addrs)
+    if debug_mode:
+        print(f"[LOBBY UI] Setting up P2P Network on {listen_addr} for {player_name}")
+    net = P2PNetwork(listen_addr, peer_addrs, debug_mode=debug_mode)
 
     all_addrs = sorted(set(peer_addrs))
     expected_peers = len(all_addrs)
-    print(f"[LOBBY UI] Expecting {expected_peers} total peers.")
+    if debug_mode:
+        print(f"[LOBBY UI] Expecting {expected_peers} total peers.")
 
     # --- Shared State (for communication between threads and UI) ---
     peer_boards = {}
@@ -122,7 +129,8 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
     ready_lock = threading.Lock()
 
     # --- Network Processing Thread ---
-    print("[LOBBY UI] Starting network processing thread...")
+    if debug_mode:
+        print("[LOBBY UI] Starting network processing thread...")
     network_thread = threading.Thread(
         target=process_network_messages,  # Renamed from process_game_states
         args=(
@@ -139,6 +147,7 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
             results_received_event,
             listen_addr,  # Pass own listen address for comparison
             all_addrs,  # Pass the list of all addresses
+            debug_mode,  # Pass debug mode
         ),
         daemon=True,
     )
@@ -156,7 +165,8 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
         with peer_boards_lock:
             peer_boards.clear()  # Clear opponent boards for new game
 
-        print("[LOBBY UI] Entering lobby menu...")
+        if debug_mode:
+            print("[LOBBY UI] Entering lobby menu...")
         # Run the lobby menu UI - returns seed if game starts, None if user quits
         start_info = run_lobby_menu(
             stdscr,
@@ -169,14 +179,17 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
             listen_addr,  # Pass own listen addr to mark self ready
             game_started_event,  # Pass event to check for externally triggered start
             all_addrs,  # Pass all_addrs
+            debug_mode,  # Pass debug mode
         )
 
         if start_info is None:
-            print("[LOBBY UI] User quit from lobby menu.")
+            if debug_mode:
+                print("[LOBBY UI] User quit from lobby menu.")
             break  # Exit the main loop if user quits
 
         seed = start_info["seed"]
-        print(f"[LOBBY UI] Lobby menu returned seed: {seed}. Starting game...")
+        if debug_mode:
+            print(f"[LOBBY UI] Lobby menu returned seed: {seed}. Starting game...")
 
         # --- Run the Actual Game ---
         # We need a piece generator based on the agreed seed
@@ -192,23 +205,26 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
             def send(self, target_addr, data: bytes):
                 # This might need adjustment if direct sends are needed,
                 # currently game sends GARBAGE/LOSE via broadcast.
-                print(
-                    f"[PeerSocketAdapter] WARNING: send() called for {target_addr}, not implemented for direct P2P."
-                )
+                if debug_mode:
+                    print(
+                        f"[PeerSocketAdapter] WARNING: send() called for {target_addr}, not implemented for direct P2P."
+                    )
                 pass
 
             def sendall(self, data: bytes):
                 s = data.decode().strip()
-                print(
-                    f"[PeerSocketAdapter] sendall received: {s[:50]}..."
-                )  # Log truncated message
+                if debug_mode:
+                    print(
+                        f"[PeerSocketAdapter] sendall received: {s[:50]}..."
+                    )  # Log truncated message
                 if s.startswith("GARBAGE:"):
                     try:
                         n = int(s.split(":", 1)[1])
                         if n > 0:
-                            print(
-                                f"[PeerSocketAdapter] Broadcasting GARBAGE: {n} lines"
-                            )
+                            if debug_mode:
+                                print(
+                                    f"[PeerSocketAdapter] Broadcasting GARBAGE: {n} lines"
+                                )
                             # Broadcast protobuf message with player_name as sender
                             net.broadcast(
                                 tetris_pb2.TetrisMessage(
@@ -227,9 +243,10 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
                             attacks_sent_int = int(parts[2])
                             attacks_received_int = int(parts[3])
                             final_score_int = int(parts[4])
-                            print(
-                                f"[PeerSocketAdapter] Broadcasting LOSE: time={survival_time_float}, sent={attacks_sent_int}, rcvd={attacks_received_int}, score={final_score_int}"
-                            )
+                            if debug_mode:
+                                print(
+                                    f"[PeerSocketAdapter] Broadcasting LOSE: time={survival_time_float}, sent={attacks_sent_int}, rcvd={attacks_received_int}, score={final_score_int}"
+                                )
 
                             net.broadcast(
                                 tetris_pb2.TetrisMessage(
@@ -300,7 +317,8 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
                         f"[PeerSocketAdapter] WARNING: Unsupported message type in sendall: {s[:20]}..."
                     )
 
-        print(f"[LOBBY UI] Calling run_game for {player_name}")
+        if debug_mode:
+            print(f"[LOBBY UI] Calling run_game for {player_name}")
         # Pass stdscr to run_game now
         final_score = run_game(
             stdscr,  # Pass the screen object
@@ -311,12 +329,16 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
             peer_boards,
             peer_boards_lock,
             player_name,
+            debug_mode,  # Pass debug mode
         )
 
         # Instantiate the renderer here to pass it down
         renderer = CursesRenderer(stdscr)
 
-        print(f"[LOBBY UI] Game finished for {player_name}. Final score: {final_score}")
+        if debug_mode:
+            print(
+                f"[LOBBY UI] Game finished for {player_name}. Final score: {final_score}"
+            )
 
         # Broadcast our LOSE message one last time in case it was missed
         net.broadcast(
@@ -338,15 +360,17 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
             )
 
         # Wait until all results are received (or timeout)
-        print("[LOBBY UI] Waiting for all player results...")
+        if debug_mode:
+            print("[LOBBY UI] Waiting for all player results...")
         wait_start_time = time.time()
         while True:
             with scores_lock:
                 current_score_count = len(scores)
                 if current_score_count >= expected_peers:
-                    print(
-                        f"[LOBBY UI] All results received ({current_score_count}/{expected_peers})."
-                    )
+                    if debug_mode:
+                        print(
+                            f"[LOBBY UI] All results received ({current_score_count}/{expected_peers})."
+                        )
                     break
             if time.time() - wait_start_time > MAX_GAME_TIME:  # Max game time
                 print(
@@ -373,6 +397,7 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
             expected_peers,
             results_received_event,  # Keep event if needed elsewhere, but primary wait is in wrapper now
             renderer,  # Pass the renderer instance
+            debug_mode,
         )
 
         # Wait a bit before returning to lobby
@@ -391,9 +416,11 @@ def run_lobby_menu(
     listen_addr,
     game_started_event,
     all_addrs,
+    debug_mode=False,
 ):
     """Displays the lobby menu, handles input, and waits for game start."""
-    print("[LOBBY MENU] Entered.")
+    if debug_mode:
+        print("[LOBBY MENU] Entered.")
 
     menu_options = ["Ready", "View Peers", "View Network", "Quit"]
     current_selection = 0
@@ -407,10 +434,11 @@ def run_lobby_menu(
     my_identity = net._get_peer_identity(listen_addr)
     is_leader = my_identity == leader_identity
 
-    print(f"[LOBBY MENU] All Normalized Addrs: {normalized_addrs}")
-    print(f"[LOBBY MENU] Leader Identity: {leader_identity}")
-    print(f"[LOBBY MENU] My Identity: {my_identity}")
-    print(f"[LOBBY MENU] Is Leader: {is_leader}")
+    if debug_mode:
+        print(f"[LOBBY MENU] All Normalized Addrs: {normalized_addrs}")
+        print(f"[LOBBY MENU] Leader Identity: {leader_identity}")
+        print(f"[LOBBY MENU] My Identity: {my_identity}")
+        print(f"[LOBBY MENU] Is Leader: {is_leader}")
 
     # Mark self as ready immediately if only one expected peer (solo play/debug)
     if expected_peers == 1:
@@ -436,7 +464,10 @@ def run_lobby_menu(
             if status_update[0] == "START":
                 received_seed = status_update[1]
                 game_started_event.set()  # Ensure event is set if START received
-                print(f"[LOBBY MENU] Received START via queue, seed={received_seed}")
+                if debug_mode:
+                    print(
+                        f"[LOBBY MENU] Received START via queue, seed={received_seed}"
+                    )
 
         except queue.Empty:
             pass
@@ -444,7 +475,8 @@ def run_lobby_menu(
         # --- Check Game Start Conditions ---
         # 1. Explicit START message received
         if received_seed is not None:
-            print("[LOBBY MENU] Game starting due to received START message.")
+            if debug_mode:
+                print("[LOBBY MENU] Game starting due to received START message.")
             return {"seed": received_seed}
 
         # 2. All peers are ready AND I am the leader (implicit start for leader)
@@ -456,11 +488,15 @@ def run_lobby_menu(
                 # but normalized is likely better for consistency.
                 # Using normalized addresses ensures everyone calculates the same hash.
                 seed_source = ",".join(normalized_addrs) + f",{time.time()}"
-                print(f"[LOBBY MENU LEADER] Calculating seed from peers: {seed_source}")
+                if debug_mode:
+                    print(
+                        f"[LOBBY MENU LEADER] Calculating seed from peers: {seed_source}"
+                    )
                 calculated_seed = hash(seed_source) % 1000000
-                print(
-                    f"[LOBBY MENU LEADER] All peers ready ({ready_count}/{expected_peers}). Broadcasting START, seed={calculated_seed}"
-                )
+                if debug_mode:
+                    print(
+                        f"[LOBBY MENU LEADER] All peers ready ({ready_count}/{expected_peers}). Broadcasting START, seed={calculated_seed}"
+                    )
                 net.broadcast(
                     tetris_pb2.TetrisMessage(
                         type=tetris_pb2.START, seed=calculated_seed
@@ -512,21 +548,26 @@ def run_lobby_menu(
             key = curses.KEY_ENTER  # Treat 'q' as selecting Quit
         elif key == curses.KEY_ENTER or key == 10 or key == 13:
             selected_option = menu_options[current_selection]
-            print(f"[LOBBY MENU] User selected: {selected_option}")
+            if debug_mode:
+                print(f"[LOBBY MENU] User selected: {selected_option}")
 
             if selected_option == "Ready":
                 with ready_lock:
                     # Use my_identity which is already calculated
                     if my_identity not in ready_peers_normalized:
                         ready_peers_normalized.add(my_identity)
-                        print(f"[LOBBY MENU] Sending READY message for {my_identity}")
+                        if debug_mode:
+                            print(
+                                f"[LOBBY MENU] Sending READY message for {my_identity}"
+                            )
                         net.broadcast(
                             tetris_pb2.TetrisMessage(
                                 type=tetris_pb2.READY, sender=listen_addr
                             )
                         )
                     else:
-                        print(f"[LOBBY MENU] Already marked as ready.")
+                        if debug_mode:
+                            print(f"[LOBBY MENU] Already marked as ready.")
                 last_status_update = "You are Ready!"  # Update local status display
 
             elif selected_option == "View Peers":
@@ -568,9 +609,11 @@ def draw_results_screen(
     expected_peers,
     results_received_event,
     renderer,  # Receive the CursesRenderer instance
+    debug_mode=False,
 ):
     """Prepares final stats and calls the renderer to display them."""
-    print("[RESULTS] Preparing results data.")
+    if renderer.debug_mode:
+        print("[RESULTS] Preparing results data.")
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     title = "=== FINAL RESULTS ==="
@@ -612,9 +655,10 @@ def draw_results_screen(
             )
 
     # Call the actual renderer method to draw the game over screen
-    print(
-        f"[RESULTS] Passing {len(results_for_renderer)} results to renderer.draw_game_over"
-    )
+    if renderer.debug_mode:
+        print(
+            f"[RESULTS] Passing {len(results_for_renderer)} results to renderer.draw_game_over"
+        )
     renderer.draw_game_over(results_for_renderer)
 
 
@@ -633,9 +677,11 @@ def process_network_messages(
     results_received_event,
     listen_addr,  # Own address
     all_addrs,  # Pass the list of all addresses
+    debug_mode=False,
 ):
     """Thread function to continuously process incoming network messages."""
-    print("[NET THREAD] Started.")
+    if debug_mode:
+        print("[NET THREAD] Started.")
     seed_value = None  # Track locally if START received
 
     while True:
@@ -676,9 +722,10 @@ def process_network_messages(
                 with ready_lock:
                     if normalized_peer not in ready_peers_normalized:
                         ready_peers_normalized.add(normalized_peer)
-                        print(
-                            f"[NET THREAD] Peer READY: {normalized_peer} ({len(ready_peers_normalized)} total)"
-                        )
+                        if debug_mode:
+                            print(
+                                f"[NET THREAD] Peer READY: {normalized_peer} ({len(ready_peers_normalized)} total)"
+                            )
                         # Send status update to lobby UI
                         lobby_status_queue.put(("READY", normalized_peer))
 
@@ -686,7 +733,8 @@ def process_network_messages(
                 # Signal game start (used by lobby menu)
                 if not game_started_event.is_set():
                     seed_value = msg.seed
-                    print(f"[NET THREAD] Received START, seed = {seed_value}")
+                    if debug_mode:
+                        print(f"[NET THREAD] Received START, seed = {seed_value}")
                     game_started_event.set()
                     lobby_status_queue.put(("START", seed_value))
 
@@ -723,33 +771,37 @@ def process_network_messages(
                         # Store "time:sent:received:score" string in scores dict
                         result_data = f"{survival_time:.2f}:{attacks_sent}:{attacks_received}:{final_score}"
                         scores[peer_name] = result_data
-                        print(
-                            f"[NET THREAD] Received LOSE from {peer_name}. Score data: {result_data}"
-                        )
+                        if debug_mode:
+                            print(
+                                f"[NET THREAD] Received LOSE from {peer_name}. Score data: {result_data}"
+                            )
                         lobby_status_queue.put(
                             ("LOSE", peer_name)
                         )  # Signal lobby UI if needed
 
             elif msg.type == tetris_pb2.GAME_RESULTS:
                 # Signal results fully received (used by results screen)
-                print(f"[NET THREAD] Received GAME_RESULTS: {msg.results}")
+                if debug_mode:
+                    print(f"[NET THREAD] Received GAME_RESULTS: {msg.results}")
                 results_received_event.set()
                 lobby_status_queue.put(("RESULTS", msg.results))
 
             elif msg.type == tetris_pb2.GARBAGE:
                 # Forward GARBAGE to game logic if it's not from ourselves
                 if msg.sender != listen_addr:
-                    print(
-                        f"[NET THREAD] Received GARBAGE from {msg.sender}: {msg.garbage} lines. Queuing for game."
-                    )
+                    if debug_mode:
+                        print(
+                            f"[NET THREAD] Received GARBAGE from {msg.sender}: {msg.garbage} lines. Queuing for game."
+                        )
                     try:
                         game_message_queue.put(msg)  # Pass the whole message
                     except Exception as e:
                         print(f"[NET THREAD] Error queueing garbage: {e}")
                 else:
-                    print(
-                        f"[NET THREAD] Ignored own GARBAGE message: {msg.garbage} lines"
-                    )
+                    if debug_mode:
+                        print(
+                            f"[NET THREAD] Ignored own GARBAGE message: {msg.garbage} lines"
+                        )
 
         except queue.Empty:
             # Timeout occurred, loop continues

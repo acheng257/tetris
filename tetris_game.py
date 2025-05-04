@@ -685,9 +685,11 @@ def run_game(
     peer_boards=None,
     peer_boards_lock=None,
     player_name=None,
+    debug_mode=False,
 ):
     """Main game function that handles game loop and input/output"""
-    print("[RUN GAME] Entered.")
+    if debug_mode:
+        print("[RUN GAME] Entered.")
 
     try:
         # Ensure curses settings are appropriate for the game phase
@@ -697,20 +699,28 @@ def run_game(
 
         # Initialize game components
         game_state = GameState(
-            0
+            0, debug_mode=debug_mode
         )  # Seed is now managed externally, just need a placeholder
-        print("[RUN GAME] Initializing CursesRenderer...")
-        renderer = CursesRenderer(stdscr)  # Pass the existing stdscr object
-        print("[RUN GAME] Initializing InputHandler...")
-        input_handler = InputHandler(stdscr)  # Pass the existing stdscr object
+        if debug_mode:
+            print("[RUN GAME] Initializing CursesRenderer...")
+        renderer = CursesRenderer(
+            stdscr, debug_mode=debug_mode
+        )  # Pass the existing stdscr object and debug mode
+        if debug_mode:
+            print("[RUN GAME] Initializing InputHandler...")
+        input_handler = InputHandler(
+            stdscr, debug_mode=debug_mode
+        )  # Pass the existing stdscr object and debug mode
 
         # Override the game's piece generator with the provided one
-        print("[RUN GAME] Setting initial pieces...")
+        if debug_mode:
+            print("[RUN GAME] Setting initial pieces...")
         game_state.current_piece = get_next_piece()
         game_state.next_piece = get_next_piece()
 
         # Create the game controller and inject the get_next_piece function
-        print("[RUN GAME] Initializing GameController...")
+        if debug_mode:
+            print("[RUN GAME] Initializing GameController...")
         controller = GameController(
             game_state=game_state,
             renderer=renderer,
@@ -721,6 +731,7 @@ def run_game(
             peer_boards=peer_boards,
             peer_boards_lock=peer_boards_lock,
             player_name=player_name,
+            debug_mode=debug_mode,
         )
 
         # Add the piece generator function to the controller
@@ -738,11 +749,13 @@ def run_game(
             # Render the game
             controller.render()
 
-        print("[RUN GAME] Exiting game loop.")
+        if debug_mode:
+            print("[RUN GAME] Exiting game loop.")
 
         # Return final game stats
         final_stats = controller.get_stats()
-        print(f"[RUN GAME] Returning final stats: {final_stats}")
+        if debug_mode:
+            print(f"[RUN GAME] Returning final stats: {final_stats}")
         return final_stats
 
     except Exception as e:
@@ -768,7 +781,8 @@ if __name__ == "__main__":
         seed = random.randint(0, 1000000)
         get_next_piece_func = create_piece_generator(seed)
         # Run the game, passing the stdscr from the wrapper
-        final_stats = run_game(stdscr, get_next_piece_func)
+        # Enable debug mode for standalone testing if desired
+        final_stats = run_game(stdscr, get_next_piece_func, debug_mode=True)
         print("Standalone game finished.")
         print(f"Final Stats: {final_stats}")
         print("Press any key to exit.")

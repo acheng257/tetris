@@ -100,6 +100,12 @@ if __name__ == "__main__":
         required=True,
         help="List of peer addresses (host:port) including yourself. Can be space or comma separated.",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",  # Makes it a boolean flag
+        default=False,  # Defaults to False if not provided
+        help="Enable detailed debug logging.",
+    )
     args = parser.parse_args()
 
     # Process peer list to handle both space and comma separation
@@ -114,10 +120,11 @@ if __name__ == "__main__":
     print(f"Player Name: {player_name}")
     print(f"Listen Port: {args.port}")
     print(f"Peer List: {peer_list}")
+    print(f"Debug Mode: {args.debug}")
 
     try:
         # Call the new main function that handles curses UI
-        run_lobby_ui_and_game(args.port, peer_list, player_name)
+        run_lobby_ui_and_game(args.port, peer_list, player_name, args.debug)
     except Exception as e:
         print(f"FATAL ERROR in run_lobby_ui_and_game: {e}")
         import traceback

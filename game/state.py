@@ -63,7 +63,7 @@ def create_piece_generator(seed):
 
 # ---------------------- Game State Class ---------------------- #
 class GameState:
-    def __init__(self, seed):
+    def __init__(self, seed, debug_mode=False):
         self.board = self._create_board()
         self.score = 0
         self.level = 1
@@ -75,6 +75,7 @@ class GameState:
         self.next_piece = self._get_next_piece_func()
         self.held_piece = None
         self.can_hold = True
+        self.debug_mode = debug_mode  # Store debug mode
 
     def _create_board(self):
         return [[EMPTY_CELL for _ in range(BOARD_WIDTH)] for _ in range(BOARD_HEIGHT)]
@@ -130,9 +131,10 @@ class GameState:
         """Add incoming garbage to the pending queue."""
         if count > 0:
             self.pending_garbage += count
-            print(
-                f"[GARBAGE QUEUE] Queued {count} lines. Total pending: {self.pending_garbage}"
-            )
+            if self.debug_mode:
+                print(
+                    f"[GARBAGE QUEUE] Queued {count} lines. Total pending: {self.pending_garbage}"
+                )
 
     def reduce_pending_garbage(self, reduction_amount):
         """Reduce pending garbage by the specified amount (e.g., due to line clears)."""
@@ -141,9 +143,10 @@ class GameState:
 
         actual_reduction = min(self.pending_garbage, reduction_amount)
         self.pending_garbage -= actual_reduction
-        print(
-            f"[GARBAGE QUEUE] Reduced pending by {actual_reduction} (tried {reduction_amount}). Remaining: {self.pending_garbage}"
-        )
+        if self.debug_mode:
+            print(
+                f"[GARBAGE QUEUE] Reduced pending by {actual_reduction} (tried {reduction_amount}). Remaining: {self.pending_garbage}"
+            )
         return actual_reduction  # Return how much was actually reduced
 
     def apply_pending_garbage(self):
@@ -152,8 +155,9 @@ class GameState:
         if count <= 0:
             return False
 
-        print(f"[GARBAGE APPLY] Applying {count} pending garbage lines")
-        print(f"[GARBAGE APPLY] Board before: {len(self.board)} rows")
+        if self.debug_mode:
+            print(f"[GARBAGE APPLY] Applying {count} pending garbage lines")
+            print(f"[GARBAGE APPLY] Board before: {len(self.board)} rows")
 
         for _ in range(count):
             gap = random.randint(0, BOARD_WIDTH - 1)
@@ -169,9 +173,10 @@ class GameState:
         lines_applied = count
         self.pending_garbage = 0
 
-        print(
-            f"[GARBAGE APPLY] Board after: {len(self.board)} rows. Applied {lines_applied} lines."
-        )
+        if self.debug_mode:
+            print(
+                f"[GARBAGE APPLY] Board after: {len(self.board)} rows. Applied {lines_applied} lines."
+            )
 
         return True  # Indicate success
 
@@ -186,16 +191,18 @@ class GameState:
         if self.check_collision(self.current_piece, 0, 0):
             # Check if it *also* collides one step down (true block out)
             if self.check_collision(self.current_piece, 0, 1):
-                print(
-                    "[GAME OVER CHECK] New piece collided immediately AND cannot move down (Block Out)."
-                )
+                if self.debug_mode:
+                    print(
+                        "[GAME OVER CHECK] New piece collided immediately AND cannot move down (Block Out)."
+                    )
                 self.game_over = True
                 return True
             # It collided, but can potentially move down. The game isn't technically over yet,
             # although it's likely a "Top Out" situation if the player can't clear space fast.
-            print(
-                "[GAME OVER CHECK] New piece collided at spawn, but can move down (Top Out). Game continues."
-            )
+            if self.debug_mode:
+                print(
+                    "[GAME OVER CHECK] New piece collided at spawn, but can move down (Top Out). Game continues."
+                )
             return False  # Not a definite game over yet
 
         # Original check: Blocks are already static in the topmost visible rows (less common)
@@ -276,9 +283,10 @@ class GameState:
 
     def add_garbage_lines(self, count):
         # THIS METHOD IS NOW DEPRECATED - Use queue_garbage and apply_pending_garbage
-        print(
-            f"[DEPRECATED] add_garbage_lines called with {count} - Should use queue/apply"
-        )
+        if self.debug_mode:
+            print(
+                f"[DEPRECATED] add_garbage_lines called with {count} - Should use queue/apply"
+            )
         # For safety, let's route it to the new queueing method
         self.queue_garbage(count)
         return True

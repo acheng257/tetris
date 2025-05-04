@@ -27,9 +27,10 @@ COLORS = {
 
 
 class CursesRenderer:
-    def __init__(self, stdscr):
+    def __init__(self, stdscr, debug_mode=False):
         self.stdscr = stdscr
         self.init_curses()
+        self.debug_mode = debug_mode  # Store debug mode
 
     def init_curses(self):
         """Initialize curses settings and colors"""
@@ -156,7 +157,8 @@ class CursesRenderer:
 
     def draw_piece(self, piece, board, ghost=False):
         """Draw the active piece and optionally its ghost (landing position)"""
-        print("[RENDER DEBUG] Calling draw_piece")
+        if self.debug_mode:
+            print("[RENDER DEBUG] Calling draw_piece")
         h, w = self.stdscr.getmaxyx()
         board_height = BOARD_HEIGHT + 2
         board_width = BOARD_WIDTH * 2 + 2
@@ -204,7 +206,8 @@ class CursesRenderer:
 
     def _check_collision(self, board, piece, dx=0, dy=0):
         """Helper method for ghost piece calculation"""
-        print("[RENDER DEBUG] Calling _check_collision")
+        if self.debug_mode:
+            print("[RENDER DEBUG] Calling _check_collision")
         shape = piece.shape
         for y, row in enumerate(shape):
             for x, cell in enumerate(row):
@@ -212,19 +215,27 @@ class CursesRenderer:
                     new_x = piece.x + x + dx
                     new_y = piece.y + y + dy
                     if new_x < 0 or new_x >= BOARD_WIDTH or new_y >= BOARD_HEIGHT:
-                        print(f"[RENDER DEBUG] Collision detected at {new_x}, {new_y}")
+                        if self.debug_mode:
+                            print(
+                                f"[RENDER DEBUG] Collision detected at {new_x}, {new_y}"
+                            )
                         return True
                     if new_y < 0:
                         continue  # Allow pieces to start above the board
                     if board[new_y][new_x] != EMPTY_CELL:
-                        print(f"[RENDER DEBUG] Collision detected at {new_x}, {new_y}")
+                        if self.debug_mode:
+                            print(
+                                f"[RENDER DEBUG] Collision detected at {new_x}, {new_y}"
+                            )
                         return True
-        print("[RENDER DEBUG] No collision detected")
+        if self.debug_mode:
+            print("[RENDER DEBUG] No collision detected")
         return False
 
     def draw_next_and_held(self, next_piece, held_piece):
         """Draw the next and held pieces"""
-        print("[RENDER DEBUG] Calling draw_next_and_held")
+        if self.debug_mode:
+            print("[RENDER DEBUG] Calling draw_next_and_held")
         h, w = self.stdscr.getmaxyx()
         board_height = BOARD_HEIGHT + 2
         board_width = BOARD_WIDTH * 2 + 2
@@ -266,7 +277,8 @@ class CursesRenderer:
 
     def draw_other_players_boards(self, peer_boards, peer_boards_lock):
         """Draw miniature versions of other players' boards"""
-        print("[RENDER DEBUG] Calling draw_other_players_boards")
+        if self.debug_mode:
+            print("[RENDER DEBUG] Calling draw_other_players_boards")
         h, w = self.stdscr.getmaxyx()
         main_board_width = BOARD_WIDTH * 2 + 2
         main_board_height = BOARD_HEIGHT + 2
@@ -442,7 +454,8 @@ class CursesRenderer:
 
     def draw_combo_message(self, combo_system, current_time):
         """Draw the combo message if there is one active"""
-        print("[RENDER DEBUG] Calling draw_combo_message")
+        if self.debug_mode:
+            print("[RENDER DEBUG] Calling draw_combo_message")
         # Update combo debug message timeout
         combo_system.check_debug_timeout(current_time)
 
@@ -527,9 +540,10 @@ class CursesRenderer:
 
     def draw_pending_garbage_indicator(self, pending_garbage_amount):
         """Draw the pending garbage indicator bar on the right side."""
-        print(
-            f"[RENDER DEBUG] Calling draw_pending_garbage_indicator with amount: {pending_garbage_amount}"
-        )
+        if self.debug_mode:
+            print(
+                f"[RENDER DEBUG] Calling draw_pending_garbage_indicator with amount: {pending_garbage_amount}"
+            )
         if pending_garbage_amount <= 0:
             return
 

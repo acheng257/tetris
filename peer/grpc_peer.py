@@ -12,7 +12,7 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
     dials out to every other peer to form a full mesh.
     """
 
-    def __init__(self, listen_addr, peer_addrs):
+    def __init__(self, listen_addr, peer_addrs, debug_mode=False):
         # Shared incoming queue for all peers: (peer_id, TetrisMessage)
         self.incoming = queue.Queue()
         # Outgoing queues for each peer (address -> Queue)
@@ -35,8 +35,12 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         except Exception:
             self.listen_port = None
 
-        print(f"[DEBUG] My IP addresses: {self.my_ips}")
-        print(f"[DEBUG] My listen port: {self.listen_port}")
+        # Add debug mode attribute
+        self.debug_mode = debug_mode
+
+        if self.debug_mode:
+            print(f"[DEBUG] My IP addresses: {self.my_ips}")
+            print(f"[DEBUG] My listen port: {self.listen_port}")
 
         self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
         tetris_pb2_grpc.add_TetrisServiceServicer_to_server(self, self.server)
@@ -54,7 +58,8 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
 
             # Skip self-connections with more robust checks
             if self._is_self_addr(addr, host, port):
-                print(f"[DEBUG] Skipping dial to self at {addr}")
+                if self.debug_mode:
+                    print(f"[DEBUG] Skipping dial to self at {addr}")
                 continue
 
             # Add to persistent peers list for reconnection
@@ -121,9 +126,10 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
 
             # Check if we already have a connection to this peer
             if self._is_duplicate_connection(addr):
-                print(
-                    f"[DEBUG] Already have a connection to peer with identity {peer_identity}, skipping {addr}"
-                )
+                if self.debug_mode:
+                    print(
+                        f"[DEBUG] Already have a connection to peer with identity {peer_identity}, skipping {addr}"
+                    )
                 return
 
             q = queue.Queue()
@@ -135,7 +141,9 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
                 while True:
                     msg = q.get()
                     # Skip debug output for GAME_STATE messages
-                    if not hasattr(msg, "type") or msg.type != tetris_pb2.GAME_STATE:
+                    if self.debug_mode and (
+                        not hasattr(msg, "type") or msg.type != tetris_pb2.GAME_STATE
+                    ):
                         print(f"[DEBUG] OUT → {addr}: {msg.type}")
                     yield msg
 
@@ -143,9 +151,10 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
             threading.Thread(
                 target=self._recv_thread, args=(addr, response_iter), daemon=True
             ).start()
-            print(
-                f"[DEBUG] Connected to peer stub at {addr} (identity: {peer_identity})"
-            )
+            if self.debug_mode:
+                print(
+                    f"[DEBUG] Connected to peer stub at {addr} (identity: {peer_identity})"
+                )
         except Exception as e:
             print(f"[ERROR] Failed to connect to peer {addr}: {e}")
             if addr in self.out_queues:
@@ -160,7 +169,9 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         try:
             for msg in response_iter:
                 # Skip debug output for GAME_STATE messages
-                if not hasattr(msg, "type") or msg.type != tetris_pb2.GAME_STATE:
+                if self.debug_mode and (
+                    not hasattr(msg, "type") or msg.type != tetris_pb2.GAME_STATE
+                ):
                     print(f"[DEBUG] IN  ← {addr}: {msg.type}")
                 self.incoming.put((addr, msg))
         except Exception as e:
@@ -174,9 +185,10 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
                 for peer in list(self.unique_peers):
                     if self._get_peer_identity(peer) == peer_identity:
                         self.unique_peers.remove(peer)
-                        print(
-                            f"[DEBUG] Removed {peer} from unique_peers due to connection failure"
-                        )
+                        if self.debug_mode:
+                            print(
+                                f"[DEBUG] Removed {peer} from unique_peers due to connection failure"
+                            )
 
             # Try to reconnect if this is a persistent peer
             if addr in self.persistent_peers:
@@ -190,9 +202,10 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         # Check if we already have a connection from this peer
         with self.lock:
             if self._is_duplicate_connection(peer_id):
-                print(
-                    f"[DEBUG] Duplicate connection from {peer_id} (identity: {peer_identity}), rejecting"
-                )
+                if self.debug_mode:
+                    print(
+                        f"[DEBUG] Duplicate connection from {peer_id} (identity: {peer_identity}), rejecting"
+                    )
                 context.abort(grpc.StatusCode.ALREADY_EXISTS, "Duplicate connection")
                 return
 
@@ -200,13 +213,18 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
             q = queue.Queue()
             self.out_queues[peer_id] = q
 
-        print(f"[DEBUG] Peer {peer_id} connected inbound (identity: {peer_identity})")
+        if self.debug_mode:
+            print(
+                f"[DEBUG] Peer {peer_id} connected inbound (identity: {peer_identity})"
+            )
 
         def reader():
             try:
                 for msg in request_iterator:
                     # Skip debug output for GAME_STATE messages
-                    if not hasattr(msg, "type") or msg.type != tetris_pb2.GAME_STATE:
+                    if self.debug_mode and (
+                        not hasattr(msg, "type") or msg.type != tetris_pb2.GAME_STATE
+                    ):
                         print(f"[DEBUG] IN  ← {peer_id}: {msg.type}")
                     self.incoming.put((peer_id, msg))
             except Exception as e:
@@ -219,9 +237,10 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
                     if peer_id in self.out_queues:
                         del self.out_queues[peer_id]
 
-                    print(
-                        f"[DEBUG] Peer {peer_id} disconnected (identity: {peer_identity})"
-                    )
+                    if self.debug_mode:
+                        print(
+                            f"[DEBUG] Peer {peer_id} disconnected (identity: {peer_identity})"
+                        )
 
         threading.Thread(target=reader, daemon=True).start()
 
@@ -229,6 +248,11 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         try:
             while True:
                 msg = q.get()
+                # Skip debug output for GAME_STATE messages
+                if self.debug_mode and (
+                    not hasattr(msg, "type") or msg.type != tetris_pb2.GAME_STATE
+                ):
+                    print(f"[DEBUG] OUT → {peer_id}: {msg.type}")
                 yield msg
         except Exception as e:
             print(f"[ERROR] outbound stream to {peer_id} failed: {e}")
@@ -242,7 +266,7 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
     def broadcast(self, msg):
         """Broadcast a TetrisMessage to all connected peers."""
         # Add debug logging for garbage messages
-        if hasattr(msg, "type") and msg.type == 2:  # GARBAGE type
+        if self.debug_mode and hasattr(msg, "type") and msg.type == 2:  # GARBAGE type
             print(
                 f"[P2P DEBUG] Broadcasting GARBAGE message: {msg.garbage} lines to {len(self.out_queues)} peers"
             )
@@ -257,7 +281,11 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         """Send a message to a specific peer"""
         with self.lock:
             if target_addr in self.out_queues:
-                if hasattr(msg, "type") and msg.type == tetris_pb2.GARBAGE:
+                if (
+                    self.debug_mode
+                    and hasattr(msg, "type")
+                    and msg.type == tetris_pb2.GARBAGE
+                ):
                     print(
                         f"[P2P DEBUG] Sending GARBAGE to {target_addr}: {msg.garbage} lines"
                     )
@@ -363,7 +391,8 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
             self.reconnect_timers[addr].cancel()
 
         def reconnect_task():
-            print(f"[DEBUG] Attempting to reconnect to {addr}")
+            if self.debug_mode:
+                print(f"[DEBUG] Attempting to reconnect to {addr}")
             self._connect_to_peer(addr)
             # Remove from timers if successful (otherwise it will be rescheduled)
             if addr in self.reconnect_timers:
@@ -374,4 +403,5 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
         timer.daemon = True
         self.reconnect_timers[addr] = timer
         timer.start()
-        print(f"[DEBUG] Scheduled reconnection to {addr} in {delay} seconds")
+        if self.debug_mode:
+            print(f"[DEBUG] Scheduled reconnection to {addr} in {delay} seconds")

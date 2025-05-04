@@ -5,8 +5,9 @@ import time
 class InputHandler:
     """Handles keyboard input and manages key states"""
 
-    def __init__(self, stdscr):
+    def __init__(self, stdscr, debug_mode=False):
         self.stdscr = stdscr
+        self.debug_mode = debug_mode  # Store debug mode
 
         # Key state tracking
         self.pressed_keys = set()
