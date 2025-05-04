@@ -1,0 +1,37 @@
+--- Log Start (CoolCommander) ---
+Arguments: ['/Users/alicecheng/Documents/Documents - Alice’s MacBook Air/Harvard/CS2620/tetris/peer/peer.py', '--port', '50051', '--peers', 'localhost:50051', 'localhost:50052', 'localhost:50053']
+Initial CWD: /Users/alicecheng/Documents/Documents - Alice’s MacBook Air/Harvard/CS2620/tetris
+Player Name: CoolCommander
+Listen Port: 50051
+Peer List: ['localhost:50051', 'localhost:50052', 'localhost:50053']
+Debug Mode: False
+[LOBBY] Starting curses wrapper...
+[DEBUG] P2P server listening on [::]:50051
+[ERROR] _recv_thread for localhost:50053 crashed: <_MultiThreadedRendezvous of RPC that terminated with:
+	status = StatusCode.UNAVAILABLE
+	details = "failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:50053: Failed to connect to remote host: connect: Connection refused (61)"
+	debug_error_string = "UNKNOWN:Error received from peer  {grpc_message:"failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:50053: Failed to connect to remote host: connect: Connection refused (61)", grpc_status:14, created_time:"2025-05-04T18:28:13.329389-04:00"}"
+>
+[ERROR] _recv_thread for localhost:50052 crashed: <_MultiThreadedRendezvous of RPC that terminated with:
+	status = StatusCode.UNAVAILABLE
+	details = "failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:50052: Failed to connect to remote host: connect: Connection refused (61)"
+	debug_error_string = "UNKNOWN:Error received from peer  {grpc_message:"failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:50052: Failed to connect to remote host: connect: Connection refused (61)", grpc_status:14, created_time:"2025-05-04T18:28:13.329387-04:00"}"
+>
+[SEND GARBAGE] Peer is localhost:ephemeral
+[SEND GARBAGE] Peer is localhost:ephemeral
+[SEND GARBAGE] Peer is localhost:ephemeral
+[SEND GARBAGE] Peer is localhost:ephemeral
+[SEND GARBAGE] Sending 4 lines to 1 players with lowest score: ['localhost:50053']
+[ERROR] inbound reader for ipv6:%5B::1%5D:55754 crashed: 
+[ERROR] _recv_thread for localhost:50052 crashed: <_MultiThreadedRendezvous of RPC that terminated with:
+	status = StatusCode.UNAVAILABLE
+	details = "Socket closed"
+	debug_error_string = "UNKNOWN:Error received from peer ipv6:%5B::1%5D:50052 {grpc_message:"Socket closed", grpc_status:14, created_time:"2025-05-04T18:29:01.248301-04:00"}"
+>
+[ERROR] inbound reader for ipv6:%5B::1%5D:55758 crashed: 
+[ERROR] _recv_thread for localhost:50053 crashed: <_MultiThreadedRendezvous of RPC that terminated with:
+	status = StatusCode.UNAVAILABLE
+	details = "Socket closed"
+	debug_error_string = "UNKNOWN:Error received from peer ipv6:%5B::1%5D:50053 {grpc_message:"Socket closed", grpc_status:14, created_time:"2025-05-04T18:29:02.550386-04:00"}"
+>
+--- Log End (CoolCommander) ---

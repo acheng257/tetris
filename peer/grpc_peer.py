@@ -264,34 +264,42 @@ class P2PNetwork(tetris_pb2_grpc.TetrisServiceServicer):
                     del self.out_queues[peer_id]
 
     def broadcast(self, msg):
-        """Broadcast a TetrisMessage to all connected peers."""
-        # Add debug logging for garbage messages
-        if self.debug_mode and hasattr(msg, "type") and msg.type == 2:  # GARBAGE type
-            print(
-                f"[P2P DEBUG] Broadcasting GARBAGE message: {msg.garbage} lines to {len(self.out_queues)} peers"
-            )
-            if hasattr(msg, "sender"):
-                print(f"[P2P DEBUG] - Sender: {msg.sender}")
-
+        """Broadcast to all connected peers, deduplicating by identity."""
         with self.lock:
+            # Track which identities we've already sent to
+            sent_identities = set()
+            
             for addr, q in self.out_queues.items():
-                q.put(msg)
+                # Get normalized identity
+                peer_identity = self._get_peer_identity(addr)
+                
+                # Only send if we haven't sent to this identity yet
+                if peer_identity not in sent_identities:
+                    q.put(msg)
+                    sent_identities.add(peer_identity)
+                    
+                    if self.debug_mode and hasattr(msg, "type") and msg.type == tetris_pb2.GARBAGE:
+                        print(f"[P2P DEBUG] Sent GARBAGE to {peer_identity}: {msg.garbage} lines")
 
     def send(self, target_addr, msg):
-        """Send a message to a specific peer"""
+        """Send a message to a specific peer, ensuring only one copy is sent."""
         with self.lock:
-            if target_addr in self.out_queues:
-                if (
-                    self.debug_mode
-                    and hasattr(msg, "type")
-                    and msg.type == tetris_pb2.GARBAGE
-                ):
-                    print(
-                        f"[P2P DEBUG] Sending GARBAGE to {target_addr}: {msg.garbage} lines"
-                    )
-                self.out_queues[target_addr].put(msg)
-            else:
+            target_identity = self._get_peer_identity(target_addr)
+            sent = False
+            
+            # Find the first connection matching this identity
+            for addr, q in self.out_queues.items():
+                if self._get_peer_identity(addr) == target_identity and not sent:
+                    q.put(msg)
+                    sent = True
+                    
+                    if self.debug_mode and hasattr(msg, "type") and msg.type == tetris_pb2.GARBAGE:
+                        print(f"[P2P DEBUG] Sent GARBAGE to {target_identity}: {msg.garbage} lines")
+                    break
+                    
+            if not sent:
                 print(f"[ERROR] No connection to {target_addr}")
+
 
     def _normalize_peer_addr(self, addr):
         """Normalize a peer address to a standard format to help with deduplication"""

@@ -228,6 +228,9 @@ def _run_lobby_ui_wrapper(
                 if net.debug_mode:
                     print(f"[PeerSocketAdapter] Unicasting {count} garbage lines to {target_addr}")
                 net.send(target_addr, msg)
+            
+            def _get_peer_identity(self, addr):
+                return net._get_peer_identity(addr)
 
             def sendall(self, data: bytes):
                 s = data.decode().strip()
@@ -235,25 +238,7 @@ def _run_lobby_ui_wrapper(
                     print(
                         f"[PeerSocketAdapter] sendall received: {s[:50]}..."
                     )  # Log truncated message
-                if s.startswith("GARBAGE:"):
-                    try:
-                        n = int(s.split(":", 1)[1])
-                        if n > 0:
-                            if debug_mode:
-                                print(
-                                    f"[PeerSocketAdapter] Broadcasting GARBAGE: {n} lines"
-                                )
-                            # Broadcast protobuf message with player_name as sender
-                            net.broadcast(
-                                tetris_pb2.TetrisMessage(
-                                    type=tetris_pb2.GARBAGE,
-                                    garbage=n,
-                                    sender=player_name,
-                                )
-                            )
-                    except ValueError:
-                        print(f"[PeerSocketAdapter] ERROR: Invalid GARBAGE format: {s}")
-                elif s.startswith("LOSE:"):
+                if s.startswith("LOSE:"):
                     try:
                         parts = s.split(":")
                         if len(parts) >= 5:
@@ -767,6 +752,11 @@ def process_network_messages(
                 if not peer_name:  # Skip if we can't identify the sender
                     print("[NET THREAD] Received LOSE without sender name, skipping.")
                     continue
+
+                with peer_boards_lock:
+                    if peer_name in peer_boards:
+                        peer_boards[peer_name]["lost"] = True
+                        print(f"[NET THREAD] Marked {peer_name} as lost")
 
                 with scores_lock:
                     if peer_name not in scores:

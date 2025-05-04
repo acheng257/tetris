@@ -1,0 +1,16 @@
+--- Log Start (BraveHero) ---
+Arguments: ['/Users/alicecheng/Documents/Documents - Alice’s MacBook Air/Harvard/CS2620/tetris/peer/peer.py', '--port', '50053', '--peers', 'localhost:50051', 'localhost:50052', 'localhost:50053']
+Initial CWD: /Users/alicecheng/Documents/Documents - Alice’s MacBook Air/Harvard/CS2620/tetris
+Player Name: BraveHero
+Listen Port: 50053
+Peer List: ['localhost:50051', 'localhost:50052', 'localhost:50053']
+Debug Mode: False
+[LOBBY] Starting curses wrapper...
+[DEBUG] P2P server listening on [::]:50053
+[ERROR] inbound reader for ipv6:%5B::1%5D:55762 crashed: 
+[ERROR] _recv_thread for localhost:50052 crashed: <_MultiThreadedRendezvous of RPC that terminated with:
+	status = StatusCode.UNAVAILABLE
+	details = "Socket closed"
+	debug_error_string = "UNKNOWN:Error received from peer ipv6:%5B::1%5D:50052 {grpc_message:"Socket closed", grpc_status:14, created_time:"2025-05-04T18:29:01.248374-04:00"}"
+>
+--- Log End (BraveHero) ---
