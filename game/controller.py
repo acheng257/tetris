@@ -211,78 +211,30 @@ class GameController:
         return attack_values.get(lines_cleared, 0)
 
     def _lock_current_piece(self, current_time):
-        """Lock the current piece, handle line clearing, garbage reduction/application, scoring, etc."""
+        """Lock current piece with proper combo handling"""
         self.game_state.merge_piece(self.game_state.current_piece)
         lines_cleared = self.game_state.clear_lines()
 
-        # Calculate attack/garbage sent based *only* on the line clear type
+        # Get base attack and combo garbage
         base_attack = self._get_attack_value(lines_cleared)
-        print(
-            f"[ATTACK CALC] Lines Cleared: {lines_cleared}, Base Attack: {base_attack}"
-        )
-
-        # Calculate combo bonus garbage separately (Jstris combo table)
-        combo_bonus_garbage = 0
         combo_result = self.combo_system.update(lines_cleared, current_time)
-        combo_num = combo_result["combo_count"]
-        print(f"[ATTACK CALC] Combo Count: {combo_num}")
+        combo_garbage = self.combo_system.get_garbage_count()
 
-        if lines_cleared > 0 and combo_num >= 1:
-            # Combo values: 0=0, 1=0, 2=1, 3=1, 4=1, 5=2, 6=2, 7=3, 8=3, 9=4, 10=4, 11=4, 12+=5
-            if combo_num <= 1:
-                combo_bonus_garbage = 0
-            elif combo_num <= 4:
-                combo_bonus_garbage = 1
-            elif combo_num <= 6:
-                combo_bonus_garbage = 2
-            elif combo_num <= 8:
-                combo_bonus_garbage = 3
-            elif combo_num <= 11:
-                combo_bonus_garbage = 4
-            else:  # 12+
-                combo_bonus_garbage = 5
-            print(f"[ATTACK CALC] Combo Bonus Garbage: {combo_bonus_garbage}")
-            # --- ADJUSTMENT: Use MAX instead of SUM ---
-            # Use the maximum of the line clear attack and the combo bonus
-            attack_sent = max(base_attack, combo_bonus_garbage)
-        else:
-            attack_sent = base_attack  # No combo or no lines cleared, use base attack
+        attack_sent = base_attack + combo_garbage
+        print(f"[ATTACK CALC] Base: {base_attack} + Combo: {combo_garbage} = {attack_sent}")
 
-        print(f"[ATTACK CALC] Final Attack Value (Pre-Cancel): {attack_sent}")
-
-        # Set combo debug message
-        if combo_result["debug_message"]:
-            player_display_name = self.player_name if self.player_name else "You"
-            self.combo_system.debug_message = (
-                f"{player_display_name} {combo_result['debug_message']}"
-            )
-
-        # --- Garbage Handling ---
+        # Garbage handling
         if lines_cleared > 0:
-            # Lines cleared: Reduce incoming garbage first
-            cancelled_garbage = self.game_state.reduce_pending_garbage(attack_sent)
-            # Send the remaining attack (if any) after cancelling
-            net_attack_sent = attack_sent - cancelled_garbage
-            if net_attack_sent > 0:
-                print(
-                    f"[ATTACK SEND] Calculated Net Attack: {net_attack_sent} (Attack: {attack_sent}, Cancelled: {cancelled_garbage})"
-                )
-                self._send_garbage_to_opponents(net_attack_sent)
-            print(
-                f"[ATTACK] Cleared {lines_cleared}. Attack: {attack_sent}, Cancelled: {cancelled_garbage}, Sent: {net_attack_sent}"
-            )
+            cancelled = self.game_state.reduce_pending_garbage(attack_sent)
+            net_attack = attack_sent - cancelled
+            if net_attack > 0:
+                self.attacks_sent += net_attack
+                self._send_garbage_to_opponents(net_attack)
         else:
-            # No lines cleared: Apply pending garbage from queue
-            print(
-                f"[GARBAGE APPLY CHECK] Locking piece, lines_cleared=0. Pending garbage: {self.game_state.pending_garbage}"
-            )
-            applied_garbage = self.game_state.apply_pending_garbage()
+            self.game_state.apply_pending_garbage()
 
-        # Calculate score
-        score_gained = self.game_state.calculate_score(lines_cleared, self.level)
-        self.score += score_gained
-
-        # Spawn next piece (unless game over happened during garbage apply)
+        # Scoring
+        self.score += self.game_state.calculate_score(lines_cleared, self.level)
         self._spawn_next_piece()
 
     def _send_garbage_to_opponents(self, garbage_amount):
@@ -514,3 +466,4 @@ class GameController:
             "score": self.score,
             "level": self.level,
         }
+

@@ -98,3 +98,11 @@ class ComboSystem:
             self.debug_message = ""
             return True
         return False
+    
+    def get_garbage_count(self):
+        """Jstris-style combo garbage: 0,1,1,2,2,3,3,..."""
+        if self.combo_count >= 1:
+            return (self.combo_count + 1) // 2  # Integer division
+        return 0
+
+
