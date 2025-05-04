@@ -376,7 +376,8 @@ def draw_other_players_boards(stdscr, peer_boards, board, peer_boards_lock):
         for peer_id, peer_data in sorted_peers:
             player_name = peer_data.get("player_name", "")
             # Remove any numeric suffix that might have been added (like QuickWarriorS)
-            base_name = player_name.rstrip("S")
+            # base_name = player_name.rstrip("S")
+            base_name = player_name.split(':')[0]
 
             if base_name and base_name not in seen_player_names:
                 seen_player_names.add(base_name)

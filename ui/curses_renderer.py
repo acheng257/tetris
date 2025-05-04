@@ -468,46 +468,37 @@ class CursesRenderer:
             except curses.error:
                 pass  # Handle potential out-of-bounds errors
 
-    def draw_game_over(
-        self, survival_time, attacks_sent, attacks_received, score, player_name
-    ):
-        """Draw the game over screen with stats"""
+    def draw_game_over(self, stats_list):
+        """Draw the game over screen for each finished player in stats_list."""
         h, w = self.stdscr.getmaxyx()
+        self.stdscr.clear()
 
-        # Show attack stats
-        attacks_msg = f"Attacks - Sent: {attacks_sent}, Received: {attacks_received}"
-        survival_msg = f"Survival Time: {int(survival_time)} seconds"
-        score_msg = f"Final Score: {score}"
-        game_over_msg = "GAME OVER! Press any key..."
+        title = "   ---  GAME OVER  ---   "
+        self.stdscr.addstr(1, (w - len(title)) // 2, title, curses.A_BOLD)
 
-        try:
-            self.stdscr.addstr(
-                h // 2 - 3,
-                max(0, (w - len(score_msg)) // 2),
-                score_msg,
-                curses.A_BOLD,
-            )
-            self.stdscr.addstr(
-                h // 2 - 2,
-                max(0, (w - len(attacks_msg)) // 2),
-                attacks_msg,
-                curses.A_BOLD,
-            )
-            self.stdscr.addstr(
-                h // 2 - 1,
-                max(0, (w - len(survival_msg)) // 2),
-                survival_msg,
-                curses.A_BOLD,
-            )
-            self.stdscr.addstr(
-                h // 2,
-                max(0, (w - len(game_over_msg)) // 2),
-                game_over_msg,
-                curses.A_BOLD,
-            )
-            self.stdscr.refresh()
-        except curses.error:
-            pass
+        # Column headers
+        headers = ["Player", "Score", "Survival", "Sent", "Received"]
+        col_x = [5, 20, 35, 50, 65]  # adjust numeric x-positions as needed
+        # e.g. col_x = [5, 20, 35, 50, 65]
+
+        for idx, hdr in enumerate(headers):
+            self.stdscr.addstr(3, col_x[idx], hdr, curses.A_UNDERLINE)
+
+        # Draw each player's row
+        for row_idx, st in enumerate(stats_list):
+            y = 4 + row_idx
+            self.stdscr.addstr(y, col_x[0], str(st["player_name"]))
+            self.stdscr.addstr(y, col_x[1], str(st["score"]))
+            self.stdscr.addstr(y, col_x[2], f"{st['survival_time']:.2f}s")
+            self.stdscr.addstr(y, col_x[3], str(st["attacks_sent"]))
+            self.stdscr.addstr(y, col_x[4], str(st["attacks_received"]))
+
+        footer = "Press any key to exit"
+        self.stdscr.addstr(h - 2, (w - len(footer)) // 2, footer, curses.A_DIM)
+        self.stdscr.refresh()
+        self.stdscr.nodelay(False)
+        self.stdscr.getch()
+
 
     def draw_pending_garbage_indicator(self, pending_garbage_amount):
         """Draw the pending garbage indicator bar on the right side."""

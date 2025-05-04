@@ -180,15 +180,24 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
         get_next_piece = create_piece_generator(seed)
 
         # Create adapters for the game to interact with the network via queues
-        class NetQueueAdapter(queue.Queue):
+        class NetQueueAdapter:
+            def __init__(self, peer_adapter):
+                self.peer_adapter = peer_adapter
+
             def get_nowait(self):
-                # Game primarily consumes game messages (e.g., GARBAGE)
-                return game_message_queue.get_nowait()
+                msg = game_message_queue.get_nowait()
+                # count every incoming GARBAGE as "attacks received"
+                if msg.type == tetris_pb2.GARBAGE:
+                    self.peer_adapter.attacks_received += msg.garbage
+                return msg
 
         class PeerSocketAdapter:
+            def __init__(self):
+                # track how many garbage lines we've sent/received
+                self.attacks_sent = 0
+                self.attacks_received = 0
+
             def send(self, target_addr, data: bytes):
-                # This might need adjustment if direct sends are needed,
-                # currently game sends GARBAGE/LOSE via broadcast.
                 print(
                     f"[PeerSocketAdapter] WARNING: send() called for {target_addr}, not implemented for direct P2P."
                 )
@@ -196,53 +205,37 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
 
             def sendall(self, data: bytes):
                 s = data.decode().strip()
-                print(
-                    f"[PeerSocketAdapter] sendall received: {s[:50]}..."
-                )  # Log truncated message
                 if s.startswith("GARBAGE:"):
                     try:
                         n = int(s.split(":", 1)[1])
                         if n > 0:
-                            print(
-                                f"[PeerSocketAdapter] Broadcasting GARBAGE: {n} lines"
-                            )
+                            # count outgoing attacks
+                            self.attacks_sent += n
                             net.broadcast(
                                 tetris_pb2.TetrisMessage(
                                     type=tetris_pb2.GARBAGE,
                                     garbage=n,
                                     sender=listen_addr,
-                                    extra=(
-                                        player_name.encode() if player_name else b""
-                                    ),
                                 )
                             )
                     except ValueError:
                         print(f"[PeerSocketAdapter] ERROR: Invalid GARBAGE format: {s}")
+
                 elif s.startswith("LOSE:"):
-                    try:
-                        parts = s.split(":")
-                        if len(parts) >= 4:
-                            survival_time_float = float(parts[1])
-                            attacks_sent_int = int(parts[2])
-                            attacks_received_int = int(parts[3])
-                            print(
-                                f"[PeerSocketAdapter] Broadcasting LOSE: time={survival_time_float}, sent={attacks_sent_int}, rcvd={attacks_received_int}"
+                    parts = s.split(":")
+                    if len(parts) >= 4:
+                        survival = float(parts[1])
+                        sent = int(parts[2])
+                        recv = int(parts[3])
+                        net.broadcast(
+                            tetris_pb2.TetrisMessage(
+                                type=tetris_pb2.LOSE,
+                                sender=player_name,
+                                score=int(survival),
+                                extra=f"{sent}:{recv}".encode(),
                             )
-                            net.broadcast(
-                                tetris_pb2.TetrisMessage(
-                                    type=tetris_pb2.LOSE,
-                                    score=int(survival_time_float),
-                                    extra=f"{attacks_sent_int}:{attacks_received_int}".encode(),
-                                )
-                            )
-                        else:
-                            print(
-                                f"[PeerSocketAdapter] ERROR: Invalid LOSE format '{s}': Not enough parts."
-                            )
-                    except (ValueError, IndexError) as e:
-                        print(
-                            f"[PeerSocketAdapter] ERROR: Invalid LOSE format '{s}': {e}"
                         )
+
                 elif s.startswith("BOARD_STATE:"):
                     try:
                         parts = s.split(":", 3)
@@ -294,18 +287,23 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
                         f"[PeerSocketAdapter] WARNING: Unsupported message type in sendall: {s[:20]}..."
                     )
 
+        adapter    = PeerSocketAdapter()
+        net_adapter = NetQueueAdapter(adapter)
+
         print(f"[LOBBY UI] Calling run_game for {player_name}")
-        # Pass stdscr to run_game now
         final_score = run_game(
-            stdscr,  # Pass the screen object
+            stdscr,
             get_next_piece,
-            PeerSocketAdapter(),
-            NetQueueAdapter(),
+            adapter,
+            net_adapter,
             listen_port,
             peer_boards,
             peer_boards_lock,
             player_name,
         )
+
+        final_score["attacks_sent"]     = adapter.attacks_sent
+        final_score["attacks_received"] = adapter.attacks_received
         print(f"[LOBBY UI] Game finished for {player_name}. Final score: {final_score}")
 
         # --- Post-Game Results Handling (Simplified Placeholder) ---
@@ -313,12 +311,28 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
         net.broadcast(
             tetris_pb2.TetrisMessage(
                 type=tetris_pb2.LOSE,
+                sender=player_name,
                 score=int(final_score["survival_time"]),
                 extra=f"{final_score['attacks_sent']}:{final_score['attacks_received']}".encode(),
             )
         )
 
-        # Display results screen (basic version)
+        # Store our own result under our username
+        with scores_lock:
+            scores[player_name] = (
+                f"{final_score['survival_time']:.2f}"
+                f":{final_score['attacks_sent']}"
+                f":{final_score['attacks_received']}"
+            )
+
+        draw_personal_results_screen(stdscr, final_score, player_name)
+         
+        while True:
+            with scores_lock:
+                if len(scores) >= expected_peers:
+                    break
+            time.sleep(0.1)
+        # Draw the consolidated results screen
         draw_results_screen(
             stdscr,
             scores,
@@ -330,6 +344,22 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
 
         # Wait a bit before returning to lobby
         time.sleep(5)
+
+
+def draw_personal_results_screen(stdscr, stats, name):
+    stdscr.clear()
+    h, w = stdscr.getmaxyx()
+    lines = [
+        f"Your Results, {name}:",
+        f" Survived:         {stats['survival_time']:.2f}s",
+        f" Attacks Sent:     {stats['attacks_sent']}",
+        f" Attacks Received: {stats['attacks_received']}",
+        "",
+        "Waiting for other players..."
+    ]
+    for i, line in enumerate(lines):
+        stdscr.addstr(h//2 - 2 + i, (w - len(line))//2, line, curses.A_BOLD)
+    stdscr.refresh()
 
 
 # --- Lobby Menu Implementation ---
@@ -514,56 +544,51 @@ def draw_info_screen(stdscr, title, lines):
 
 
 def draw_results_screen(
-    stdscr, scores, scores_lock, player_name, expected_peers, results_received_event
+    stdscr,
+    scores,
+    scores_lock,
+    player_name,
+    expected_peers,
+    results_received_event
 ):
-    """Displays the final game results."""
-    print("[RESULTS] Drawing results screen.")
+    """Displays the final game results for each username in scores."""
     stdscr.clear()
     h, w = stdscr.getmaxyx()
+
     title = "=== FINAL RESULTS ==="
     stdscr.addstr(2, (w - len(title)) // 2, title, curses.A_BOLD)
 
-    # Wait briefly for results to potentially arrive
+    # Wait briefly for any last‐second peer LOSE messages
     results_received_event.wait(timeout=2.0)
 
+    # Helper to parse "time:sent:received"
+    def parse(val):
+        parts = val.split(":")
+        return float(parts[0]), int(parts[1]), int(parts[2])
+
     with scores_lock:
-        # Format results: "PlayerName: 120.5s (Attacks: 15->, 8<-)"
-        results_list = []
-        # Need player names - fetch from peer_boards (might be cleared, need adjustment)
-        # For now, just use peer_id if name isn't available
-        # Sorting: Higher survival time first
-        sorted_scores = sorted(
-            scores.items(), key=lambda item: float(item[1].split(":")[0]), reverse=True
+        # Sort by survival time descending
+        sorted_list = sorted(
+            scores.items(),
+            key=lambda kv: parse(kv[1])[0],
+            reverse=True
         )
 
-        for i, (peer_id, result_data) in enumerate(sorted_scores):
-            try:
-                parts = result_data.split(":")
-                survival_time = float(parts[0])
-                attacks_sent = int(parts[1]) if len(parts) > 1 else 0
-                attacks_received = int(parts[2]) if len(parts) > 2 else 0
-                # Ideally, resolve peer_id to player_name here
-                display_name = f"Peer_{i+1}"  # Placeholder name
-                line = f"{i+1}. {display_name}: {survival_time:.1f}s (Atk: {attacks_sent} S / {attacks_received} R)"
-                results_list.append(line)
-            except (ValueError, IndexError):
-                results_list.append(
-                    f"{i+1}. Peer_{i+1}: Invalid score data '{result_data}'"
-                )
+    # Draw each line
+    for idx, (name, data) in enumerate(sorted_list):
+        surv, sent, recv = parse(data)
+        line = f"{idx+1}. {name}: {surv:.1f}s  (Atk: {sent} S / {recv} R)"
+        stdscr.addstr(5 + idx, 4, line)
 
-        for i, line in enumerate(results_list):
-            stdscr.addstr(5 + i, 4, line)
-
-    if len(scores) < expected_peers:
-        stdscr.addstr(
-            h - 4,
-            4,
-            f"Waiting for results from other players ({len(scores)}/{expected_peers})...",
-        )
+    # If not all players have reported yet
+    if len(sorted_list) < expected_peers:
+        note = f"Waiting for results ({len(sorted_list)}/{expected_peers})..."
+        stdscr.addstr(h - 4, 4, note)
 
     stdscr.addstr(h - 2, 4, "Returning to lobby shortly...")
     stdscr.refresh()
-    # No getch here, let the main loop handle the delay
+    time.sleep(3)
+
 
 
 # --- Network Message Processing Thread ---
@@ -639,26 +664,29 @@ def process_network_messages(
                     lobby_status_queue.put(("START", seed_value))
 
             elif msg.type == tetris_pb2.LOSE:
-                # Store score, signal results processing
+                 # Use the username the peer set in `sender`
+                peer_name = msg.sender or peer_id
+
                 with scores_lock:
-                    if peer_id not in scores:
-                        survival_time = msg.score  # Integer part
+                    if peer_name not in scores:
+                        # survival time is in msg.score
+                        survival_time = msg.score
+                        # attacks data was packed into msg.extra
                         attacks_data = ""
                         if hasattr(msg, "extra") and msg.extra:
                             try:
-                                attacks_data = msg.extra.decode()  # sent:received
+                                attacks_data = msg.extra.decode()
                             except Exception:
                                 pass
 
-                        result_data = f"{survival_time:.2f}"  # Store float for sorting
+                        # build "time:sent:received"
+                        result_data = f"{survival_time:.2f}"
                         if attacks_data:
                             result_data += f":{attacks_data}"
 
-                        scores[peer_id] = result_data
-                        print(
-                            f"[NET THREAD] Received LOSE from {peer_id}. Score data: {result_data}"
-                        )
-                        lobby_status_queue.put(("LOSE", peer_id))
+                        scores[peer_name] = result_data
+                        print(f"[NET THREAD] Received LOSE from {peer_name}: {result_data}")
+                        lobby_status_queue.put(("LOSE", peer_name))
 
             elif msg.type == tetris_pb2.GAME_RESULTS:
                 # Signal results fully received (used by results screen)

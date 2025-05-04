@@ -67,45 +67,56 @@ class GameController:
         self.board_update_interval = 0.5
 
     def process_network_messages(self):
-        """Process incoming network messages"""
+        """Process incoming network messages, including peer game-over stats."""
         if self.net_queue is None:
             return
-
-        current_time = time.time()
 
         try:
             while True:
                 net_msg = self.net_queue.get_nowait()
+
+                # Handle incoming LOSE: messages from peers
+                if isinstance(net_msg, str) and net_msg.startswith("LOSE:"):
+                    # Expect "LOSE:<survival>:<sent>:<received>"
+                    parts = net_msg.strip().split(":")
+                    if len(parts) == 4:
+                        try:
+                            survival = float(parts[1])
+                            sent     = int(parts[2])
+                            recv     = int(parts[3])
+                            peer_id  = getattr(net_msg, "sender", None) or "unknown_peer"
+                            with self.peer_boards_lock:
+                                entry = self.peer_boards.setdefault(peer_id, {})
+                                entry["player_name"]      = entry.get("player_name", peer_id)
+                                entry["survival_time"]    = survival
+                                entry["attacks_sent"]     = sent
+                                entry["attacks_received"] = recv
+                                entry["score"]            = entry.get("score", 0)
+                                entry["game_over"]        = True
+                        except ValueError:
+                            pass
+                    continue
+
+                # Your existing garbage-processing logic below…
                 if isinstance(net_msg, str) and net_msg.startswith("GARBAGE:"):
                     try:
                         garbage_amount = int(net_msg.split(":", 1)[1].strip())
-                        print(
-                            f"[NET GARBAGE] Received string GARBAGE message: {garbage_amount} lines"
-                        )
                         self.game_state.queue_garbage(garbage_amount)
                         self.attacks_received += garbage_amount
-                        # Don't immediately render here, queue it first
                     except ValueError:
                         pass
-                elif (
-                    hasattr(net_msg, "type")
-                    and hasattr(net_msg, "garbage")
-                    and net_msg.garbage > 0
-                ):
-                    # Process garbage from protocol buffer
+                elif hasattr(net_msg, "type") and hasattr(net_msg, "garbage") and net_msg.garbage > 0:
                     try:
                         garbage_amount = net_msg.garbage
                         sender_info = getattr(net_msg, "sender", "")
-                        print(
-                            f"[NET GARBAGE] Received protobuf GARBAGE message: {garbage_amount} lines from {sender_info}"
-                        )
                         self.game_state.queue_garbage(garbage_amount)
                         self.attacks_received += garbage_amount
-                        # Don't immediately render here
-                    except Exception as e:
-                        print(f"[NET GARBAGE] Error processing protobuf GARBAGE: {e}")
+                    except Exception:
+                        pass
+
         except queue.Empty:
-            pass
+            return
+
 
     def update_difficulty(self):
         """Update game difficulty based on time"""
@@ -273,11 +284,11 @@ class GameController:
             self._handle_game_over()
 
     def _handle_game_over(self):
-        """Handle game over state"""
-        # Calculate final survival time
+        """Handle game over: gather stats for yourself and any peers, then render."""
+        # Finalize your own survival time
         self.survival_time = time.time() - self.start_time
 
-        # Draw the final game state
+        # Draw the final board one last time
         self.renderer.draw_board(
             self.game_state.board,
             self.score,
@@ -286,23 +297,42 @@ class GameController:
             self.player_name,
         )
 
-        # Show game over screen
-        self.renderer.draw_game_over(
-            self.survival_time,
-            self.attacks_sent,
-            self.attacks_received,
-            self.score,
-            self.player_name,
-        )
+        # Build a list of all finished-game stats
+        stats = []
 
-        # Send game over message to network
+        # 1) Local player
+        stats.append({
+            "player_name":      self.player_name,
+            "survival_time":    self.survival_time,
+            "attacks_sent":     self.attacks_sent,
+            "attacks_received": self.attacks_received,
+            "score":            self.score,
+        })
+
+        # 2) Any peer who sent a LOSE message
+        if self.peer_boards and self.peer_boards_lock:
+            with self.peer_boards_lock:
+                for peer_id, data in self.peer_boards.items():
+                    if data.get("game_over"):
+                        stats.append({
+                            "player_name":      data.get("player_name", peer_id),
+                            "survival_time":    data.get("survival_time", 0),
+                            "attacks_sent":     data.get("attacks_sent", 0),
+                            "attacks_received": data.get("attacks_received", 0),
+                            "score":            data.get("score", 0),
+                        })
+
+        # Pass the entire list to the renderer
+        self.renderer.draw_game_over(stats)
+
+        # If networking, broadcast your own LOSE so others can pick it up
         if self.client_socket:
             try:
-                self.client_socket.sendall(
-                    f"LOSE:{self.survival_time:.2f}:{self.attacks_sent}:{self.attacks_received}\n".encode()
-                )
-            except Exception as e:
-                print(f"Error sending LOSE message: {e}")
+                msg = f"LOSE:{self.survival_time:.2f}:{self.attacks_sent}:{self.attacks_received}\n"
+                self.client_socket.sendall(msg.encode())
+            except Exception:
+                pass
+
 
     def update_piece_gravity(self):
         """Apply gravity to the current piece"""
