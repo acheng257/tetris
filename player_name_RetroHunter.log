@@ -1,0 +1,38 @@
+--- Log Start (RetroHunter) ---
+Arguments: ['/Users/alicecheng/Documents/Documents - Alice’s MacBook Air/Harvard/CS2620/tetris/peer/peer.py', '--port', '50051', '--peers', 'localhost:50051', 'localhost:50052', 'localhost:50053']
+Initial CWD: /Users/alicecheng/Documents/Documents - Alice’s MacBook Air/Harvard/CS2620/tetris
+Player Name: RetroHunter
+Listen Port: 50051
+Peer List: ['localhost:50051', 'localhost:50052', 'localhost:50053']
+Debug Mode: False
+[LOBBY] Starting curses wrapper...
+[DEBUG] P2P server listening on [::]:50051
+[ERROR] _recv_thread for localhost:50052 crashed: <_MultiThreadedRendezvous of RPC that terminated with:
+	status = StatusCode.UNAVAILABLE
+	details = "failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:50052: Failed to connect to remote host: connect: Connection refused (61)"
+	debug_error_string = "UNKNOWN:Error received from peer  {created_time:"2025-05-04T15:16:47.613402-04:00", grpc_status:14, grpc_message:"failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:50052: Failed to connect to remote host: connect: Connection refused (61)"}"
+>
+[ERROR] _recv_thread for localhost:50053 crashed: <_MultiThreadedRendezvous of RPC that terminated with:
+	status = StatusCode.UNAVAILABLE
+	details = "failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:50053: Failed to connect to remote host: connect: Connection refused (61)"
+	debug_error_string = "UNKNOWN:Error received from peer  {grpc_message:"failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:50053: Failed to connect to remote host: connect: Connection refused (61)", grpc_status:14, created_time:"2025-05-04T15:16:47.613415-04:00"}"
+>
+[ERROR] _recv_thread for localhost:50053 crashed: <_MultiThreadedRendezvous of RPC that terminated with:
+	status = StatusCode.UNAVAILABLE
+	details = "failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:50053: Failed to connect to remote host: connect: Connection refused (61)"
+	debug_error_string = "UNKNOWN:Error received from peer  {created_time:"2025-05-04T15:16:52.619103-04:00", grpc_status:14, grpc_message:"failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:50053: Failed to connect to remote host: connect: Connection refused (61)"}"
+>
+[SEND GARBAGE] Failed to send garbage to localhost:50053: _run_lobby_ui_wrapper.<locals>.PeerSocketAdapter.send() missing 1 required positional argument: 'data'
+[ERROR] inbound reader for ipv6:%5B::1%5D:52632 crashed: 
+[ERROR] _recv_thread for localhost:50053 crashed: <_MultiThreadedRendezvous of RPC that terminated with:
+	status = StatusCode.UNAVAILABLE
+	details = "Socket closed"
+	debug_error_string = "UNKNOWN:Error received from peer ipv6:%5B::1%5D:50053 {grpc_message:"Socket closed", grpc_status:14, created_time:"2025-05-04T15:18:19.115659-04:00"}"
+>
+[ERROR] inbound reader for ipv6:%5B::1%5D:52625 crashed: 
+[ERROR] _recv_thread for localhost:50052 crashed: <_MultiThreadedRendezvous of RPC that terminated with:
+	status = StatusCode.UNAVAILABLE
+	details = "Socket closed"
+	debug_error_string = "UNKNOWN:Error received from peer ipv6:%5B::1%5D:50052 {grpc_message:"Socket closed", grpc_status:14, created_time:"2025-05-04T15:18:20.574467-04:00"}"
+>
+--- Log End (RetroHunter) ---

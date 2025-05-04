@@ -1,3 +1,4 @@
+import base64
 import time
 import curses
 import queue
@@ -7,6 +8,13 @@ from typing import Dict, Any, Optional, Tuple
 from game.state import Piece
 from game.combo import ComboSystem
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
+
+BOARD_WIDTH = 10
+BOARD_HEIGHT = 20
 
 class GameController:
     """
@@ -26,6 +34,8 @@ class GameController:
         peer_boards_lock=None,
         player_name=None,
         debug_mode=False,
+        privkey: Ed25519PrivateKey = None,
+        peer_pubkeys: Dict[str, Ed25519PublicKey] = None,
     ):
         self.game_state = game_state
         self.renderer = renderer
@@ -71,35 +81,116 @@ class GameController:
         # Store debug mode
         self.debug_mode = debug_mode
 
+        # Your own Ed25519 private key for signing
+        self.privkey = privkey
+        # Mapping from peer player_name → their Ed25519PublicKey
+        self.peer_pubkeys: Dict[str, Ed25519PublicKey] = peer_pubkeys or {}
+
+    # def process_network_messages(self):
+    #     """Process incoming network messages"""
+    #     if self.net_queue is None:
+    #         return
+
+    #     try:
+    #         while True:
+    #             net_msg = self.net_queue.get_nowait()
+    #             if (
+    #                 hasattr(net_msg, "type")
+    #                 and net_msg.type == tetris_pb2.GARBAGE
+    #                 and hasattr(net_msg, "garbage")
+    #                 and net_msg.garbage > 0
+    #             ):
+    #                 # Process garbage from protocol buffer
+    #                 try:
+    #                     garbage_amount = net_msg.garbage
+    #                     sender_info = getattr(net_msg, "sender", "")
+    #                     if self.debug_mode:
+    #                         print(
+    #                             f"[NET GARBAGE] Received protobuf GARBAGE message: {garbage_amount} lines from {sender_info}"
+    #                         )
+    #                     # Queue garbage in game state
+    #                     self.game_state.queue_garbage(garbage_amount)
+    #                     self.attacks_received += garbage_amount
+    #                 except Exception as e:
+    #                     print(f"[NET GARBAGE] Error processing protobuf GARBAGE: {e}")
+    #     except queue.Empty:
+    #         pass
+    def _handle_board_state(self, text: str):
+        """
+        Parse "BOARD_STATE:<score>:<flattened_board>:<piece_info>"
+        and apply it to self.peer_boards or however you track peers.
+        """
+        try:
+            _, score_s, flat, piece = text.split(":", 3)
+            score = int(score_s)
+            cells = list(map(int, flat.split(",")))
+            # reconstruct board
+            board = [
+                cells[i * BOARD_WIDTH : (i + 1) * BOARD_WIDTH]
+                for i in range(BOARD_HEIGHT)
+            ]
+            # TODO: parse piece if you need it
+            # Now store in peer_boards under sender’s name
+            sender = getattr(text, "sender", None)
+            if sender and self.peer_boards is not None:
+                with self.peer_boards_lock:
+                    self.peer_boards[sender] = {
+                        "board": board,
+                        "score": score,
+                        # you can store piece if desired
+                    }
+        except Exception as e:
+            if self.debug_mode:
+                print(f"[HANDLE BOARD] Failed to parse: {e}")
+
     def process_network_messages(self):
-        """Process incoming network messages"""
+        """Process incoming network messages, verifying Ed25519 signatures on BOARD_STATE."""
         if self.net_queue is None:
             return
 
         try:
             while True:
-                net_msg = self.net_queue.get_nowait()
+                raw = self.net_queue.get_nowait()
+
+                # ——— Check for signed BOARD_STATE ———
+                if isinstance(raw, bytes) and raw.startswith(b"BOARD_STATE:"):
+                    try:
+                        body, sigpart = raw.split(b"|SIG:", 1)
+                        signature = base64.b64decode(sigpart)
+                        # You must have stored sender name on the raw message
+                        sender = getattr(raw, "sender", None)
+                        pubkey = self.peer_pubkeys.get(sender)
+                        if not pubkey:
+                            # no public key for this sender → ignore
+                            continue
+                        pubkey.verify(signature, body)
+                        # signature valid: apply the board update
+                        self._handle_board_state(body.decode("utf-8"))
+                    except Exception:
+                        # malformed or bad signature → drop
+                        pass
+                    continue
+
+                # ——— Fallback to existing protobuf GARBAGE handler ———
+                net_msg = raw
                 if (
                     hasattr(net_msg, "type")
                     and net_msg.type == tetris_pb2.GARBAGE
                     and hasattr(net_msg, "garbage")
                     and net_msg.garbage > 0
                 ):
-                    # Process garbage from protocol buffer
                     try:
-                        garbage_amount = net_msg.garbage
+                        amt = net_msg.garbage
                         sender_info = getattr(net_msg, "sender", "")
                         if self.debug_mode:
-                            print(
-                                f"[NET GARBAGE] Received protobuf GARBAGE message: {garbage_amount} lines from {sender_info}"
-                            )
-                        # Queue garbage in game state
-                        self.game_state.queue_garbage(garbage_amount)
-                        self.attacks_received += garbage_amount
+                            print(f"[NET GARBAGE] {amt} lines from {sender_info}")
+                        self.game_state.queue_garbage(amt)
+                        self.attacks_received += amt
                     except Exception as e:
-                        print(f"[NET GARBAGE] Error processing protobuf GARBAGE: {e}")
+                        print(f"[NET GARBAGE] Error: {e}")
         except queue.Empty:
             pass
+
 
     def update_difficulty(self):
         """Update game difficulty based on time"""
@@ -362,8 +453,44 @@ class GameController:
         ):
             self._lock_current_piece(current_time)
 
+    # def send_board_state_update(self):
+    #     """Send board state updates over the network"""
+    #     current_time = time.time()
+
+    #     if (
+    #         self.client_socket is not None
+    #         and current_time - self.last_board_update_time > self.board_update_interval
+    #     ):
+
+    #         # Flatten the board to a string for sending
+    #         flattened_board = ",".join(
+    #             str(cell) for row in self.game_state.board for cell in row
+    #         )
+
+    #         # Add active piece information
+    #         if self.game_state.current_piece:
+    #             # Determine rotation state (simplified - using 0)
+    #             rotation_state = 0
+
+    #             piece_type = self.game_state.current_piece.type
+    #             piece_info = (
+    #                 f"{piece_type},"
+    #                 f"{self.game_state.current_piece.x},"
+    #                 f"{self.game_state.current_piece.y},"
+    #                 f"{rotation_state},"
+    #                 f"{self.game_state.current_piece.color}"
+    #             )
+    #         else:
+    #             piece_info = "NONE"
+
+    #         # Send the board state message
+    #         board_state_msg = (
+    #             f"BOARD_STATE:{self.score}:{flattened_board}:{piece_info}".encode()
+    #         )
+    #         self.client_socket.sendall(board_state_msg)
+    #         self.last_board_update_time = current_time
     def send_board_state_update(self):
-        """Send board state updates over the network"""
+        """Send board state updates over the network, with optional Ed25519 signature."""
         current_time = time.time()
 
         if (
@@ -371,32 +498,32 @@ class GameController:
             and current_time - self.last_board_update_time > self.board_update_interval
         ):
 
-            # Flatten the board to a string for sending
-            flattened_board = ",".join(
+            # 1) Flatten board
+            flattened = ",".join(
                 str(cell) for row in self.game_state.board for cell in row
             )
 
-            # Add active piece information
+            # 2) Active piece info
             if self.game_state.current_piece:
-                # Determine rotation state (simplified - using 0)
-                rotation_state = 0
-
-                piece_type = self.game_state.current_piece.type
-                piece_info = (
-                    f"{piece_type},"
-                    f"{self.game_state.current_piece.x},"
-                    f"{self.game_state.current_piece.y},"
-                    f"{rotation_state},"
-                    f"{self.game_state.current_piece.color}"
-                )
+                rotation = 0
+                p = self.game_state.current_piece
+                piece_info = f"{p.type},{p.x},{p.y},{rotation},{p.color}"
             else:
                 piece_info = "NONE"
 
-            # Send the board state message
-            board_state_msg = (
-                f"BOARD_STATE:{self.score}:{flattened_board}:{piece_info}".encode()
-            )
-            self.client_socket.sendall(board_state_msg)
+            # 3) Build payload body
+            body = f"BOARD_STATE:{self.score}:{flattened}:{piece_info}".encode("utf-8")
+
+            # 4) Sign it if we have a private key
+            if self.privkey:
+                sig = self.privkey.sign(body)
+                sig_b64 = base64.b64encode(sig).decode("ascii")
+                payload = body + b"|SIG:" + sig_b64.encode("ascii")
+            else:
+                payload = body
+
+            # 5) Broadcast
+            self.client_socket.sendall(payload)
             self.last_board_update_time = current_time
 
     def update(self):

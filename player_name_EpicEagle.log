@@ -1,0 +1,10 @@
+--- Log Start (EpicEagle) ---
+Arguments: ['/Users/alicecheng/Documents/Documents - Alice’s MacBook Air/Harvard/CS2620/tetris/peer/peer.py', '--port', '50053', '--peers', 'localhost:50051', 'localhost:50052', 'localhost:50053']
+Initial CWD: /Users/alicecheng/Documents/Documents - Alice’s MacBook Air/Harvard/CS2620/tetris
+Player Name: EpicEagle
+Listen Port: 50053
+Peer List: ['localhost:50051', 'localhost:50052', 'localhost:50053']
+Debug Mode: False
+[LOBBY] Starting curses wrapper...
+[DEBUG] P2P server listening on [::]:50053
+--- Log End (EpicEagle) ---
