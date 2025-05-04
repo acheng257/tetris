@@ -408,7 +408,7 @@ def run_lobby_menu(
                 # Ensure we use the *original* addresses, not the normalized ones, for the seed source if needed,
                 # but normalized is likely better for consistency.
                 # Using normalized addresses ensures everyone calculates the same hash.
-                seed_source = ",".join(normalized_addrs)
+                seed_source = ",".join(normalized_addrs) + f",{time.time()}"
                 print(f"[LOBBY MENU LEADER] Calculating seed from peers: {seed_source}")
                 calculated_seed = hash(seed_source) % 1000000
                 print(

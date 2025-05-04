@@ -98,3 +98,28 @@ class ComboSystem:
             self.debug_message = ""
             return True
         return False
+
+    def get_garbage_count(self, lines_cleared, combo_num, base_attack):
+        print(f"[ATTACK CALC] Combo Count: {combo_num}")
+
+        if lines_cleared > 0 and combo_num >= 1:
+            # Combo values: 0=0, 1=0, 2=1, 3=1, 4=1, 5=2, 6=2, 7=3, 8=3, 9=4, 10=4, 11=4, 12+=5
+            if combo_num <= 1:
+                combo_bonus_garbage = 0
+            elif combo_num <= 4:
+                combo_bonus_garbage = 1
+            elif combo_num <= 6:
+                combo_bonus_garbage = 2
+            elif combo_num <= 8:
+                combo_bonus_garbage = 3
+            elif combo_num <= 11:
+                combo_bonus_garbage = 4
+            else:  # 12+
+                combo_bonus_garbage = 5
+            print(f"[ATTACK CALC] Combo Bonus Garbage: {combo_bonus_garbage}")
+            attack_sent = max(base_attack, combo_bonus_garbage)
+        else:
+            attack_sent = base_attack  # No combo or no lines cleared, use base attack
+
+        print(f"[ATTACK CALC] Final Attack Value (Pre-Cancel): {attack_sent}")
+        return attack_sent
