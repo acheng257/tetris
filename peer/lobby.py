@@ -134,6 +134,7 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
             game_started_event,
             results_received_event,
             listen_addr,  # Pass own listen address for comparison
+            all_addrs,  # Pass the list of all addresses
         ),
         daemon=True,
     )
@@ -163,6 +164,7 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
             ready_lock,
             listen_addr,  # Pass own listen addr to mark self ready
             game_started_event,  # Pass event to check for externally triggered start
+            all_addrs,  # Pass all_addrs
         )
 
         if start_info is None:
@@ -267,17 +269,21 @@ def _run_lobby_ui_wrapper(stdscr, listen_port, peer_addrs, player_name):
                                         color=int(color),
                                     )
                                     board_state.active_piece.CopyFrom(active_piece)
-
-                            # print(f"[PeerSocketAdapter] Broadcasting GAME_STATE for {player_name}") # Too noisy
-                            net.broadcast(
-                                tetris_pb2.TetrisMessage(
-                                    type=tetris_pb2.GAME_STATE, board_state=board_state
+                                    # print(f"[PeerSocketAdapter] Broadcasting GAME_STATE for {player_name}") # Too noisy
+                                    net.broadcast(
+                                        tetris_pb2.TetrisMessage(
+                                            type=tetris_pb2.GAME_STATE,
+                                            board_state=board_state,
+                                        )
+                                    )
+                                else:
+                                    print(
+                                        f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format '{s}': Not enough parts."
+                                    )
+                            else:
+                                print(
+                                    f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format '{s}': Not enough parts."
                                 )
-                            )
-                        else:
-                            print(
-                                f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format '{s}': Not enough parts."
-                            )
                     except (ValueError, IndexError) as e:
                         print(
                             f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format '{s}': {e}"
@@ -336,6 +342,7 @@ def run_lobby_menu(
     ready_lock,
     listen_addr,
     game_started_event,
+    all_addrs,
 ):
     """Displays the lobby menu, handles input, and waits for game start."""
     print("[LOBBY MENU] Entered.")
@@ -343,17 +350,29 @@ def run_lobby_menu(
     menu_options = ["Ready", "View Peers", "View Network", "Quit"]
     current_selection = 0
     last_status_update = ""
-    seed = None
+    received_seed = None
+
+    # Determine the leader based on the sorted canonical address list
+    # Normalize addresses first for consistent comparison
+    normalized_addrs = sorted([net._get_peer_identity(addr) for addr in all_addrs])
+    leader_identity = normalized_addrs[0] if normalized_addrs else None
+    my_identity = net._get_peer_identity(listen_addr)
+    is_leader = my_identity == leader_identity
+
+    print(f"[LOBBY MENU] All Normalized Addrs: {normalized_addrs}")
+    print(f"[LOBBY MENU] Leader Identity: {leader_identity}")
+    print(f"[LOBBY MENU] My Identity: {my_identity}")
+    print(f"[LOBBY MENU] Is Leader: {is_leader}")
 
     # Mark self as ready immediately if only one expected peer (solo play/debug)
     if expected_peers == 1:
         with ready_lock:
-            self_identity = net._get_peer_identity(listen_addr)
-            ready_peers_normalized.add(self_identity)
-            print(f"[LOBBY MENU] Auto-ready (1 player): {self_identity}")
-            net.broadcast(
-                tetris_pb2.TetrisMessage(type=tetris_pb2.READY, sender=listen_addr)
-            )
+            if my_identity not in ready_peers_normalized:
+                ready_peers_normalized.add(my_identity)
+                print(f"[LOBBY MENU] Auto-ready (1 player): {my_identity}")
+                net.broadcast(
+                    tetris_pb2.TetrisMessage(type=tetris_pb2.READY, sender=listen_addr)
+                )
 
     while True:
         # --- Process Network Updates for UI ---
@@ -361,36 +380,46 @@ def run_lobby_menu(
             status_update = lobby_status_queue.get_nowait()
             # status_update could be ('READY', peer_addr), ('START', seed), ('PEER_COUNT', count), etc.
             # For now, just store the latest message type
-            last_status_update = f"Net Status: {status_update[0]}"
+            status_message = str(status_update[0])
+            if len(status_update) > 1:
+                status_message += f": {status_update[1]}"
+            last_status_update = f"Net: {status_message}"
+
             if status_update[0] == "START":
-                seed = status_update[1]
+                received_seed = status_update[1]
                 game_started_event.set()  # Ensure event is set if START received
-                print(f"[LOBBY MENU] Received START via queue, seed={seed}")
+                print(f"[LOBBY MENU] Received START via queue, seed={received_seed}")
 
         except queue.Empty:
             pass
 
         # --- Check Game Start Conditions ---
         # 1. Explicit START message received
-        if seed is not None:
+        if received_seed is not None:
             print("[LOBBY MENU] Game starting due to received START message.")
-            return {"seed": seed}
+            return {"seed": received_seed}
 
-        # 2. All peers are ready (implicit start)
+        # 2. All peers are ready AND I am the leader (implicit start for leader)
         with ready_lock:
             ready_count = len(ready_peers_normalized)
-            if ready_count >= expected_peers:
-                # Generate deterministic seed
-                seed_source = ",".join(sorted(ready_peers_normalized))
-                seed = hash(seed_source) % 1000000
+            if ready_count >= expected_peers and is_leader:
+                # Leader calculates seed using the canonical sorted list of *all* expected peers
+                # Ensure we use the *original* addresses, not the normalized ones, for the seed source if needed,
+                # but normalized is likely better for consistency.
+                # Using normalized addresses ensures everyone calculates the same hash.
+                seed_source = ",".join(normalized_addrs)
+                print(f"[LOBBY MENU LEADER] Calculating seed from peers: {seed_source}")
+                calculated_seed = hash(seed_source) % 1000000
                 print(
-                    f"[LOBBY MENU] All peers ready ({ready_count}/{expected_peers}). Broadcasting START, seed={seed}"
+                    f"[LOBBY MENU LEADER] All peers ready ({ready_count}/{expected_peers}). Broadcasting START, seed={calculated_seed}"
                 )
                 net.broadcast(
-                    tetris_pb2.TetrisMessage(type=tetris_pb2.START, seed=seed)
+                    tetris_pb2.TetrisMessage(
+                        type=tetris_pb2.START, seed=calculated_seed
+                    )
                 )
                 game_started_event.set()  # Signal game start
-                return {"seed": seed}
+                return {"seed": calculated_seed}
 
         # --- Draw Menu ---
         stdscr.clear()
@@ -439,10 +468,10 @@ def run_lobby_menu(
 
             if selected_option == "Ready":
                 with ready_lock:
-                    self_identity = net._get_peer_identity(listen_addr)
-                    if self_identity not in ready_peers_normalized:
-                        ready_peers_normalized.add(self_identity)
-                        print(f"[LOBBY MENU] Sending READY message for {self_identity}")
+                    # Use my_identity which is already calculated
+                    if my_identity not in ready_peers_normalized:
+                        ready_peers_normalized.add(my_identity)
+                        print(f"[LOBBY MENU] Sending READY message for {my_identity}")
                         net.broadcast(
                             tetris_pb2.TetrisMessage(
                                 type=tetris_pb2.READY, sender=listen_addr
@@ -453,12 +482,14 @@ def run_lobby_menu(
                 last_status_update = "You are Ready!"  # Update local status display
 
             elif selected_option == "View Peers":
-                # Placeholder - display peer info screen (implement later)
-                draw_info_screen(stdscr, "Peer Info Placeholder", ["Coming soon..."])
+                # Call the specific function to draw peer info
+                draw_peers_info(
+                    stdscr, net, ready_peers_normalized, ready_lock, expected_peers
+                )
                 pass
             elif selected_option == "View Network":
-                # Placeholder - display network info screen (implement later)
-                draw_info_screen(stdscr, "Network Info Placeholder", ["Coming soon..."])
+                # Call the specific function to draw network info
+                draw_network_info(stdscr, net, all_addrs)  # Need all_addrs here
                 pass
             elif selected_option == "Quit":
                 return None  # Signal to exit
@@ -548,6 +579,7 @@ def process_network_messages(
     game_started_event,
     results_received_event,
     listen_addr,  # Own address
+    all_addrs,  # Pass the list of all addresses
 ):
     """Thread function to continuously process incoming network messages."""
     print("[NET THREAD] Started.")
@@ -658,3 +690,96 @@ def process_network_messages(
             import traceback
 
             print(f"[NET THREAD] Traceback: {traceback.format_exc()}")
+
+
+def draw_peers_info(stdscr, net, ready_peers_normalized, ready_lock, expected_peers):
+    """Displays information about connected and ready peers."""
+    stdscr.clear()
+    h, w = stdscr.getmaxyx()
+    title = "=== Peer Status ==="
+    stdscr.addstr(1, (w - len(title)) // 2, title, curses.A_BOLD)
+
+    lines = []
+    with ready_lock:
+        ready_count = len(ready_peers_normalized)
+        lines.append(f"Ready Peers: {ready_count} / {expected_peers}")
+        lines.append("Ready Peer Identities:")
+        if ready_peers_normalized:
+            for i, peer_identity in enumerate(sorted(list(ready_peers_normalized))):
+                lines.append(f"  {i+1}. {peer_identity}")
+        else:
+            lines.append("  (None)")
+
+    # Add separator
+    lines.append("-" * (w - 4))
+
+    # Also show currently connected peers from network layer
+    with net.lock:
+        lines.append("Active Connections (Unique Inbound/Established):")
+        unique_list = sorted(list(net.unique_peers))
+        if unique_list:
+            for i, peer_addr in enumerate(unique_list):
+                # Attempt to normalize for display consistency
+                identity = net._get_peer_identity(peer_addr)
+                lines.append(f"  {i+1}. {peer_addr} (ID: {identity})")
+        else:
+            lines.append("  (None)")
+
+    # Draw the collected lines
+    for i, line in enumerate(lines):
+        if i < h - 4:  # Prevent writing outside screen bounds
+            stdscr.addstr(3 + i, 2, line[: w - 3])  # Truncate long lines
+
+    stdscr.addstr(h - 2, 2, "Press any key to return...")
+    stdscr.refresh()
+    stdscr.nodelay(False)  # Wait for key
+    stdscr.getch()
+    stdscr.nodelay(True)  # Restore non-blocking
+
+
+def draw_network_info(stdscr, net, all_addrs):
+    """Displays detailed network connection information."""
+    stdscr.clear()
+    h, w = stdscr.getmaxyx()
+    title = "=== Network Status ==="
+    stdscr.addstr(1, (w - len(title)) // 2, title, curses.A_BOLD)
+
+    lines = []
+    lines.append(f"My Listen Address: {net.listen_addr}")
+    lines.append(f"Expected Peers (from cmd args): {len(all_addrs)}")
+    for i, addr in enumerate(all_addrs):
+        lines.append(f"  {i+1}. {addr}")
+
+    lines.append("-" * (w - 4))
+
+    with net.lock:
+        lines.append(f"Outgoing Connections Attempted/Active ({len(net.out_queues)}):")
+        out_list = sorted(list(net.out_queues.keys()))
+        if out_list:
+            for i, addr in enumerate(out_list):
+                lines.append(f"  {i+1}. {addr}")
+        else:
+            lines.append("  (None)")
+
+        lines.append("-" * (w - 4))
+
+        lines.append(
+            f"Unique Inbound/Established Connections ({len(net.unique_peers)}):"
+        )
+        unique_list = sorted(list(net.unique_peers))
+        if unique_list:
+            for i, addr in enumerate(unique_list):
+                lines.append(f"  {i+1}. {addr}")
+        else:
+            lines.append("  (None)")
+
+    # Draw the collected lines
+    for i, line in enumerate(lines):
+        if i < h - 4:
+            stdscr.addstr(3 + i, 2, line[: w - 3])
+
+    stdscr.addstr(h - 2, 2, "Press any key to return...")
+    stdscr.refresh()
+    stdscr.nodelay(False)  # Wait for key
+    stdscr.getch()
+    stdscr.nodelay(True)  # Restore non-blocking

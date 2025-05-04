@@ -70,7 +70,7 @@ player_name = generate_random_name()
 
 # --- Logging Setup ---
 # Initialize logging as early as possible
-log_file_path = "game.log"
+log_file_path = f"player_name_{player_name}.log"
 try:
     original_stdout = sys.stdout  # Save original stdout
     original_stderr = sys.stderr  # Save original stderr
