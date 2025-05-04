@@ -86,35 +86,6 @@ class GameController:
         # Mapping from peer player_name → their Ed25519PublicKey
         self.peer_pubkeys: Dict[str, Ed25519PublicKey] = peer_pubkeys or {}
 
-    # def process_network_messages(self):
-    #     """Process incoming network messages"""
-    #     if self.net_queue is None:
-    #         return
-
-    #     try:
-    #         while True:
-    #             net_msg = self.net_queue.get_nowait()
-    #             if (
-    #                 hasattr(net_msg, "type")
-    #                 and net_msg.type == tetris_pb2.GARBAGE
-    #                 and hasattr(net_msg, "garbage")
-    #                 and net_msg.garbage > 0
-    #             ):
-    #                 # Process garbage from protocol buffer
-    #                 try:
-    #                     garbage_amount = net_msg.garbage
-    #                     sender_info = getattr(net_msg, "sender", "")
-    #                     if self.debug_mode:
-    #                         print(
-    #                             f"[NET GARBAGE] Received protobuf GARBAGE message: {garbage_amount} lines from {sender_info}"
-    #                         )
-    #                     # Queue garbage in game state
-    #                     self.game_state.queue_garbage(garbage_amount)
-    #                     self.attacks_received += garbage_amount
-    #                 except Exception as e:
-    #                     print(f"[NET GARBAGE] Error processing protobuf GARBAGE: {e}")
-    #     except queue.Empty:
-    #         pass
     def _handle_board_state(self, text: str):
         """
         Parse "BOARD_STATE:<score>:<flattened_board>:<piece_info>"
@@ -296,84 +267,103 @@ class GameController:
         return attack_values.get(lines_cleared, 0)
 
     def _lock_current_piece(self, current_time):
-        """Lock the current piece, handle line clearing, garbage reduction/application, scoring, etc."""
+        """Lock the current piece, handle line clearing, garbage, scoring, and piece spawn."""
+
+        # 1) Merge and clear
         self.game_state.merge_piece(self.game_state.current_piece)
         lines_cleared = self.game_state.clear_lines()
 
-        # Calculate attack/garbage sent based *only* on the line clear type
+        # 2) Compute base attack
         base_attack = self._get_attack_value(lines_cleared)
         if self.debug_mode:
-            print(
-                f"[ATTACK CALC] Lines Cleared: {lines_cleared}, Base Attack: {base_attack}"
-            )
+            print(f"[ATTACK CALC] Lines Cleared: {lines_cleared}, Base Attack: {base_attack}")
 
-        # Calculate combo bonus garbage separately (Jstris combo table)
-        combo_bonus_garbage = 0
+        # 3) Update combo system and get combo bonus
         combo_result = self.combo_system.update(lines_cleared, current_time)
         combo_num = combo_result["combo_count"]
-        attack_sent = self.combo_system.get_garbage_count(
+        combo_bonus = self.combo_system.get_garbage_count(
             lines_cleared, combo_num, base_attack
         )
+        if self.debug_mode and combo_bonus > 0:
+            print(f"[COMBO BONUS] Combo Count: {combo_num}, Combo Bonus: {combo_bonus}")
 
-        # Set combo debug message
-        if combo_result["debug_message"]:
-            player_display_name = self.player_name if self.player_name else "You"
-            self.combo_system.debug_message = (
-                f"{player_display_name} {combo_result['debug_message']}"
-            )
+        # 4) Total garbage to send: base + combo
+        attack_sent = base_attack + combo_bonus
+        if self.debug_mode:
+            print(f"[TOTAL ATTACK] Sending {attack_sent} lines (Base {base_attack} + Combo {combo_bonus})")
 
-        # --- Garbage Handling ---
-        if lines_cleared > 0:
-            # Lines cleared: Reduce incoming garbage first
-            cancelled_garbage = self.game_state.reduce_pending_garbage(attack_sent)
-            # Send the remaining attack (if any) after cancelling
-            net_attack_sent = attack_sent - cancelled_garbage
-            if net_attack_sent > 0:
-                if self.debug_mode:
-                    print(
-                        f"[ATTACK SEND] Calculated Net Attack: {net_attack_sent} (Attack: {attack_sent}, Cancelled: {cancelled_garbage})"
-                    )
-                self._send_garbage_to_opponents(net_attack_sent)
-                if self.debug_mode:
-                    print(
-                        f"[ATTACK] Cleared {lines_cleared}. Attack: {attack_sent}, Cancelled: {cancelled_garbage}, Sent: {net_attack_sent}"
-                    )
-        else:
-            # No lines cleared: Apply pending garbage from queue
+        # 5) Cancel incoming garbage first
+        if attack_sent > 0:
+            cancelled = self.game_state.reduce_pending_garbage(attack_sent)
+            net_to_send = attack_sent - cancelled
             if self.debug_mode:
-                print(
-                    f"[GARBAGE APPLY CHECK] Locking piece, lines_cleared=0. Pending garbage: {self.game_state.pending_garbage}"
-                )
-            applied_garbage = self.game_state.apply_pending_garbage()
+                print(f"[GARBAGE REDUCTION] Cancelled: {cancelled}, Net to send: {net_to_send}")
 
-        # Calculate score
-        score_gained = self.game_state.calculate_score(lines_cleared, self.level)
-        self.score += score_gained
+            if net_to_send > 0:
+                self._send_garbage_to_opponents(net_to_send)
+                if self.debug_mode:
+                    print(f"[ATTACK SENT] Unicasted {net_to_send} lines")
+        else:
+            if self.debug_mode:
+                print("[GARBAGE] No new garbage to send")
 
-        # Spawn next piece (unless game over happened during garbage apply)
+        # 6) Always apply any pending incoming garbage after sending
+        if self.game_state.pending_garbage > 0:
+            applied = self.game_state.apply_pending_garbage()
+            self.attacks_received += applied
+            if self.debug_mode:
+                print(f"[GARBAGE APPLIED] Applied {applied} pending lines")
+
+        # 7) Award points
+        gained = self.game_state.calculate_score(lines_cleared, self.level)
+        self.score += gained
+        if self.debug_mode and gained > 0:
+            print(f"[SCORE] +{gained} points (Level {self.level})")
+
+        # 8) Spawn next piece & check game over
         self._spawn_next_piece()
 
     def _send_garbage_to_opponents(self, garbage_amount):
-        """Send a specific amount of garbage lines to opponents."""
-        if self.client_socket and garbage_amount > 0:
+        """Send the full garbage amount to each player with the lowest score"""
+        if not self.client_socket or garbage_amount <= 0:
+            return
+
+        with self.peer_boards_lock:
+            if not self.peer_boards:
+                return
+            
+            # Find all players with the minimum score
+            min_score = float("inf")
+            lowest_score_peers = []
+            
+            # First pass: find the minimum score
+            for peer_id, board_data in self.peer_boards.items():
+                peer_score = board_data.get("score", float("inf"))
+                if peer_score < min_score:
+                    min_score = peer_score
+            
+            # Second pass: collect all players with that minimum score
+            for peer_id, board_data in self.peer_boards.items():
+                if board_data.get("score", float("inf")) == min_score:
+                    lowest_score_peers.append(peer_id)
+            
+            if not lowest_score_peers:
+                return
+                
+            # Send the full garbage amount to each lowest-score player
             if self.debug_mode:
-                print(f"[SEND GARBAGE] Attempting to send {garbage_amount} lines.")
-            # BROADCAST garbage for now instead of targeting lowest score
-            # This makes testing easier and is common in many Tetris versions
-            try:
-                self.client_socket.sendall(  # Use sendall for broadcasting via lobby adapter
-                    f"GARBAGE:{garbage_amount}\n".encode(),
-                )
-                self.attacks_sent += garbage_amount
+                print(f"[SEND GARBAGE] Sending {garbage_amount} lines to {len(lowest_score_peers)} players with lowest score")
+            
+            for peer_id in lowest_score_peers:
+                body = f"GARBAGE:{garbage_amount}\n".encode("utf-8")
+                self.client_socket.send(peer_id, body)
+                
                 if self.debug_mode:
-                    print(
-                        f"[SEND GARBAGE] Successfully broadcast {garbage_amount} lines. Total sent: {self.attacks_sent}"
-                    )
-            except Exception as e:
-                print(f"[ERROR] Failed to broadcast garbage: {e}")
-        elif garbage_amount <= 0:
-            if self.debug_mode:
-                print(f"[SEND GARBAGE] No garbage to send ({garbage_amount}).")
+                    print(f"[SEND GARBAGE] Sent {garbage_amount} lines to {peer_id}")
+            
+            # Track total garbage sent (multiply by number of recipients)
+            self.attacks_sent += garbage_amount * len(lowest_score_peers)
+
 
     def _spawn_next_piece(self):
         """Spawn the next piece and handle game over if needed"""
@@ -453,42 +443,6 @@ class GameController:
         ):
             self._lock_current_piece(current_time)
 
-    # def send_board_state_update(self):
-    #     """Send board state updates over the network"""
-    #     current_time = time.time()
-
-    #     if (
-    #         self.client_socket is not None
-    #         and current_time - self.last_board_update_time > self.board_update_interval
-    #     ):
-
-    #         # Flatten the board to a string for sending
-    #         flattened_board = ",".join(
-    #             str(cell) for row in self.game_state.board for cell in row
-    #         )
-
-    #         # Add active piece information
-    #         if self.game_state.current_piece:
-    #             # Determine rotation state (simplified - using 0)
-    #             rotation_state = 0
-
-    #             piece_type = self.game_state.current_piece.type
-    #             piece_info = (
-    #                 f"{piece_type},"
-    #                 f"{self.game_state.current_piece.x},"
-    #                 f"{self.game_state.current_piece.y},"
-    #                 f"{rotation_state},"
-    #                 f"{self.game_state.current_piece.color}"
-    #             )
-    #         else:
-    #             piece_info = "NONE"
-
-    #         # Send the board state message
-    #         board_state_msg = (
-    #             f"BOARD_STATE:{self.score}:{flattened_board}:{piece_info}".encode()
-    #         )
-    #         self.client_socket.sendall(board_state_msg)
-    #         self.last_board_update_time = current_time
     def send_board_state_update(self):
         """Send board state updates over the network, with optional Ed25519 signature."""
         current_time = time.time()

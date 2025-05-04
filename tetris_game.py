@@ -742,22 +742,9 @@ def run_game(
             privkey=privkey,
             peer_pubkeys=peer_pubkeys,
         )
-
-        # controller = GameController(
-        #     game_state=game_state,
-        #     renderer=renderer,
-        #     input_handler=input_handler,
-        #     client_socket=client_socket,
-        #     net_queue=net_queue,
-        #     listen_port=listen_port,
-        #     peer_boards=peer_boards,
-        #     peer_boards_lock=peer_boards_lock,
-        #     player_name=player_name,
-        #     debug_mode=debug_mode,
-        # )
-
         # Add the piece generator function to the controller
         controller.get_next_piece_func = get_next_piece
+        controller.send_board_state_update()
 
         # Main game loop
         while True:

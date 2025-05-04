@@ -202,14 +202,32 @@ def _run_lobby_ui_wrapper(
                 return game_message_queue.get_nowait()
 
         class PeerSocketAdapter:
-            def send(self, target_addr, data: bytes):
-                # This might need adjustment if direct sends are needed,
-                # currently game sends GARBAGE/LOSE via broadcast.
-                if debug_mode:
-                    print(
-                        f"[PeerSocketAdapter] WARNING: send() called for {target_addr}, not implemented for direct P2P."
-                    )
-                pass
+            def send(self, target_addr: str, data: bytes):
+                """
+                Unicast a GARBAGE message to target_addr.
+                data is expected to be b"GARBAGE:<n>\n"
+                """
+                text = data.decode("utf-8").strip()
+                if not text.startswith("GARBAGE:"):
+                    if net.debug_mode:
+                        print(f"[PeerSocketAdapter] Unsupported send payload: {text}")
+                    return
+
+                try:
+                    count = int(text.split(":", 1)[1])
+                except ValueError:
+                    print(f"[PeerSocketAdapter] Invalid garbage format: {text}")
+                    return
+
+                msg = tetris_pb2.TetrisMessage(
+                    type=tetris_pb2.GARBAGE,
+                    garbage=count,
+                    sender=player_name
+                )
+
+                if net.debug_mode:
+                    print(f"[PeerSocketAdapter] Unicasting {count} garbage lines to {target_addr}")
+                net.send(target_addr, msg)
 
             def sendall(self, data: bytes):
                 s = data.decode().strip()
@@ -266,52 +284,6 @@ def _run_lobby_ui_wrapper(
                         print(
                             f"[PeerSocketAdapter] ERROR: Invalid LOSE format '{s}': {e}"
                         )
-                # elif s.startswith("BOARD_STATE:"):
-                #     try:
-                #         parts = s.split(":", 3)
-                #         if len(parts) == 4:
-                #             score = int(parts[1])
-                #             board_cells = [int(cell) for cell in parts[2].split(",")]
-                #             piece_info = parts[3]
-
-                #             board_state = tetris_pb2.BoardState(
-                #                 cells=board_cells,
-                #                 width=10,
-                #                 height=20,
-                #                 score=score,
-                #                 player_name=player_name,
-                #             )
-                #             if piece_info != "NONE":
-                #                 piece_parts = piece_info.split(",")
-                #                 if len(piece_parts) == 5:
-                #                     ptype, x, y, rot, color = piece_parts
-                #                     active_piece = tetris_pb2.ActivePiece(
-                #                         piece_type=ptype,
-                #                         x=int(x),
-                #                         y=int(y),
-                #                         rotation=int(rot),
-                #                         color=int(color),
-                #                     )
-                #                     board_state.active_piece.CopyFrom(active_piece)
-                #                     # print(f"[PeerSocketAdapter] Broadcasting GAME_STATE for {player_name}") # Too noisy
-                #                     net.broadcast(
-                #                         tetris_pb2.TetrisMessage(
-                #                             type=tetris_pb2.GAME_STATE,
-                #                             board_state=board_state,
-                #                         )
-                #                     )
-                #                 else:
-                #                     print(
-                #                         f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format '{s}': Not enough parts."
-                #                     )
-                #             else:
-                #                 print(
-                #                     f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format '{s}': Not enough parts."
-                #                 )
-                #     except (ValueError, IndexError) as e:
-                #         print(
-                #             f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format '{s}': {e}"
-                #         )
                 elif s.startswith("BOARD_STATE:"):
                     try:
                         # Split into prefix, score, cells, piece_info_with_sig
