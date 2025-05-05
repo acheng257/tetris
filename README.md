@@ -55,6 +55,36 @@ This will launch the game with a `curses`-based lobby UI. Use the **Up/Down arro
 2.  The game will start automatically once all peers are marked as ready.
 3.  You can select **"Quit"** or press **'q'** to exit the lobby.
 
+## Running Tests and Checking Coverage
+
+This project uses `pytest` for testing and `pytest-cov` for coverage analysis.
+
+1.  **Install Test Dependencies:**
+    If you haven't already installed the development dependencies, run:
+    ```bash
+    pipenv install --dev
+    ```
+    This installs `pytest` and `pytest-cov` as specified in the `Pipfile`'s `[dev-packages]` section.
+
+2.  **Run Tests:**
+    To run all tests, execute the following command from the project root directory:
+    ```bash
+    pytest
+    ```
+
+3.  **Check Test Coverage:**
+    To run tests and generate a coverage report in the terminal, use:
+    ```bash
+    pytest --cov=.
+    ```
+    *   The `--cov=.` flag tells `pytest-cov` to measure coverage for the current directory (`.`, i.e., the project root including `game`, `ui`, `peer`, etc.).
+
+    To generate a more detailed HTML report (which you can open in a browser), use:
+    ```bash
+    pytest --cov=. --cov-report=html
+    ```
+    This will create an `htmlcov/` directory containing the report. Open the `htmlcov/index.html` file in your web browser.
+
 ## Code Structure
 
 The codebase is organized into several modules:

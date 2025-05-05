@@ -1,0 +1,14 @@
+[run]
+omit =
+    # Exclude all __init__.py files
+    */__init__.py
+    # Exclude the proto directory
+    proto/*
+    # Exclude the tests directory itself from coverage measurement
+    tests/*
+    peer/lobby.py
+
+[report]
+# Fail if coverage drops below 80%, but also show missing lines
+fail_under = 80
+show_missing = True 
