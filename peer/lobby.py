@@ -85,6 +85,13 @@ def run_lobby_ui_and_game(listen_port, peer_addrs, player_name, debug_mode=False
     )
     print("[LOBBY] Curses wrapper finished.")
 
+def get_actual_host_ip():
+    # Doesn’t actually send any packets, just uses the routing table
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))      # Google’s DNS on port 80
+    ip = s.getsockname()[0]
+    s.close()
+    return ip
 
 def _run_lobby_ui_wrapper(
     stdscr, listen_port, peer_addrs, player_name, debug_mode=False
@@ -99,10 +106,13 @@ def _run_lobby_ui_wrapper(
     stdscr.keypad(True)  # Enable special keys (like arrow keys)
     init_colors()  # Initialize color pairs (function assumed to be in tetris_game or ui module)
 
-    listen_addr = f"[::]:{listen_port}"
+    bind_addr   = f"0.0.0.0:{listen_port}"
+    actual_host_ip = get_actual_host_ip()
+    listen_addr = f"{actual_host_ip}:{listen_port}"
+    net = P2PNetwork(bind_addr, peer_addrs, debug_mode=debug_mode)
+    
     if debug_mode:
         print(f"[LOBBY UI] Setting up P2P Network on {listen_addr} for {player_name}")
-    net = P2PNetwork(listen_addr, peer_addrs, debug_mode=debug_mode)
 
     all_addrs = sorted(set(peer_addrs))
     expected_peers = len(all_addrs)
