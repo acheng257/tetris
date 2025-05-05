@@ -149,9 +149,7 @@ def test_check_debug_timeout_exact_threshold():
     # at exactly threshold, should not yet clear
     assert combo.check_debug_timeout(105.0) is False
     assert combo.debug_message == "TEST"
-
-
-# --- Additional Coverage Tests ---
+    
 
 def test_debug_mode_update_and_prints(capsys):
     combo = ComboSystem(debug_mode=True)
