@@ -10,7 +10,7 @@ import curses
 from proto import tetris_pb2
 from ui.curses_renderer import CursesRenderer
 from peer.grpc_peer import P2PNetwork
-from tetris_game import create_piece_generator, run_game, init_colors
+from game.tetris_game import create_piece_generator, run_game, init_colors
 
 MAX_GAME_TIME = 120.0
 

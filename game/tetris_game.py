@@ -330,7 +330,7 @@ def add_garbage_lines(board, count):
         garbage_line = [GARBAGE_COLOR for _ in range(BOARD_WIDTH)]
         garbage_line[gap] = EMPTY_CELL  # Add random gap
 
-        # Remove top row and add garbage to bottom
+        # Remove top row and shift all rows up
         board.pop(0)
         board.append(garbage_line)
 

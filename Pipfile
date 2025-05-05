@@ -8,6 +8,8 @@ grpcio = ">=1.55.0"
 grpcio-tools = ">=1.55.0"
 
 [dev-packages]
+pytest = "*"
+pytest-cov = "*"
 
 [requires]
 python_version = "3.13"

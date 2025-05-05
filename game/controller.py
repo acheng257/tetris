@@ -205,7 +205,8 @@ class GameController:
         return attack_values.get(lines_cleared, 0)
 
     def _lock_current_piece(self, current_time):
-        """Lock the current piece, handle line clearing, garbage reduction/application, scoring, etc."""
+        """Lock the current piece in place, check for line clears, and spawn the next piece."""
+        # Merge the piece into the board
         self.game_state.merge_piece(self.game_state.current_piece)
         lines_cleared = self.game_state.clear_lines()
 
