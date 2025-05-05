@@ -439,7 +439,7 @@ class GameController:
             self.player_name,
         ):
             # If rendering failed (e.g., terminal too small), wait and continue
-            # time.sleep(1)
+            time.sleep(1)
             return
 
         # Render other elements
