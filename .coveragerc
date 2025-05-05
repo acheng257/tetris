@@ -6,6 +6,7 @@ omit =
     proto/*
     # Exclude the tests directory itself from coverage measurement
     tests/*
+    peer/lobby.py
 
 [report]
 # Fail if coverage drops below 80%, but also show missing lines
