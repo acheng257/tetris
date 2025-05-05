@@ -10,6 +10,8 @@ from game.controller import GameController
 from ui.curses_renderer import CursesRenderer
 from ui.input_handler import InputHandler
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 locale.setlocale(locale.LC_ALL, "")
 
 # ------------------ Constants and Tetrimino Definitions ------------------ #
@@ -721,6 +723,11 @@ def run_game(
         # Create the game controller and inject the get_next_piece function
         if debug_mode:
             print("[RUN GAME] Initializing GameController...")
+        privkey = Ed25519PrivateKey.generate()
+        pubkey = privkey.public_key()
+        peer_pubkeys = {}  # fill this after your handshake
+
+        # Then pass into the controller:
         controller = GameController(
             game_state=game_state,
             renderer=renderer,
@@ -732,10 +739,12 @@ def run_game(
             peer_boards_lock=peer_boards_lock,
             player_name=player_name,
             debug_mode=debug_mode,
+            privkey=privkey,
+            peer_pubkeys=peer_pubkeys,
         )
-
         # Add the piece generator function to the controller
         controller.get_next_piece_func = get_next_piece
+        controller.send_board_state_update()
 
         # Main game loop
         while True:

@@ -85,6 +85,13 @@ def run_lobby_ui_and_game(listen_port, peer_addrs, player_name, debug_mode=False
     )
     print("[LOBBY] Curses wrapper finished.")
 
+def get_actual_host_ip():
+    # Doesn’t actually send any packets, just uses the routing table
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))      # Google’s DNS on port 80
+    ip = s.getsockname()[0]
+    s.close()
+    return ip
 
 def _run_lobby_ui_wrapper(
     stdscr, listen_port, peer_addrs, player_name, debug_mode=False
@@ -99,10 +106,13 @@ def _run_lobby_ui_wrapper(
     stdscr.keypad(True)  # Enable special keys (like arrow keys)
     init_colors()  # Initialize color pairs (function assumed to be in tetris_game or ui module)
 
-    listen_addr = f"[::]:{listen_port}"
+    bind_addr   = f"0.0.0.0:{listen_port}"
+    actual_host_ip = get_actual_host_ip()
+    listen_addr = f"{actual_host_ip}:{listen_port}"
+    net = P2PNetwork(bind_addr, peer_addrs, debug_mode=debug_mode)
+    
     if debug_mode:
         print(f"[LOBBY UI] Setting up P2P Network on {listen_addr} for {player_name}")
-    net = P2PNetwork(listen_addr, peer_addrs, debug_mode=debug_mode)
 
     all_addrs = sorted(set(peer_addrs))
     expected_peers = len(all_addrs)
@@ -202,14 +212,32 @@ def _run_lobby_ui_wrapper(
                 return game_message_queue.get_nowait()
 
         class PeerSocketAdapter:
-            def send(self, target_addr, data: bytes):
-                # This might need adjustment if direct sends are needed,
-                # currently game sends GARBAGE/LOSE via broadcast.
-                if debug_mode:
-                    print(
-                        f"[PeerSocketAdapter] WARNING: send() called for {target_addr}, not implemented for direct P2P."
-                    )
-                pass
+            def send(self, target_addr: str, data: bytes):
+                """
+                Unicast a GARBAGE message to target_addr.
+                data is expected to be b"GARBAGE:<n>\n"
+                """
+                text = data.decode("utf-8").strip()
+                if not text.startswith("GARBAGE:"):
+                    if net.debug_mode:
+                        print(f"[PeerSocketAdapter] Unsupported send payload: {text}")
+                    return
+
+                try:
+                    count = int(text.split(":", 1)[1])
+                except ValueError:
+                    print(f"[PeerSocketAdapter] Invalid garbage format: {text}")
+                    return
+
+                msg = tetris_pb2.TetrisMessage(
+                    type=tetris_pb2.GARBAGE,
+                    garbage=count,
+                    sender=player_name
+                )
+
+                if net.debug_mode:
+                    print(f"[PeerSocketAdapter] Unicasting {count} garbage lines to {target_addr}")
+                net.send(target_addr, msg)
 
             def sendall(self, data: bytes):
                 s = data.decode().strip()
@@ -268,12 +296,17 @@ def _run_lobby_ui_wrapper(
                         )
                 elif s.startswith("BOARD_STATE:"):
                     try:
+                        # Split into prefix, score, cells, piece_info_with_sig
                         parts = s.split(":", 3)
                         if len(parts) == 4:
                             score = int(parts[1])
                             board_cells = [int(cell) for cell in parts[2].split(",")]
-                            piece_info = parts[3]
 
+                            # Remove any signature suffix after "|SIG:" if present
+                            piece_info_raw = parts[3]
+                            piece_info_str = piece_info_raw.split("|SIG:", 1)[0]
+
+                            # Build the BoardState message
                             board_state = tetris_pb2.BoardState(
                                 cells=board_cells,
                                 width=10,
@@ -281,8 +314,9 @@ def _run_lobby_ui_wrapper(
                                 score=score,
                                 player_name=player_name,
                             )
-                            if piece_info != "NONE":
-                                piece_parts = piece_info.split(",")
+
+                            if piece_info_str != "NONE":
+                                piece_parts = piece_info_str.split(",")
                                 if len(piece_parts) == 5:
                                     ptype, x, y, rot, color = piece_parts
                                     active_piece = tetris_pb2.ActivePiece(
@@ -293,25 +327,22 @@ def _run_lobby_ui_wrapper(
                                         color=int(color),
                                     )
                                     board_state.active_piece.CopyFrom(active_piece)
-                                    # print(f"[PeerSocketAdapter] Broadcasting GAME_STATE for {player_name}") # Too noisy
-                                    net.broadcast(
-                                        tetris_pb2.TetrisMessage(
-                                            type=tetris_pb2.GAME_STATE,
-                                            board_state=board_state,
-                                        )
-                                    )
                                 else:
-                                    print(
-                                        f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format '{s}': Not enough parts."
-                                    )
+                                    print(f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE piece info: '{piece_info_str}'")
                             else:
-                                print(
-                                    f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format '{s}': Not enough parts."
+                                # it's valid to have no active piece; nothing to do
+                                pass
+
+                            net.broadcast(
+                                tetris_pb2.TetrisMessage(
+                                    type=tetris_pb2.GAME_STATE,
+                                    board_state=board_state,
                                 )
-                    except (ValueError, IndexError) as e:
-                        print(
-                            f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format '{s}': {e}"
-                        )
+                            )
+                        else:
+                            print(f"[PeerSocketAdapter] ERROR: Invalid BOARD_STATE format (wrong part count): '{s}'")
+                    except Exception as e:
+                        print(f"[PeerSocketAdapter] ERROR processing BOARD_STATE '{s}': {e}")
                 else:
                     print(
                         f"[PeerSocketAdapter] WARNING: Unsupported message type in sendall: {s[:20]}..."

@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 grpcio = ">=1.55.0"
 grpcio-tools = ">=1.55.0"
+cryptography = "*"
 
 [dev-packages]
 pytest = "*"

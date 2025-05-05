@@ -1,20 +1,18 @@
 import time
 
 
-# ComboSystem class to handle combo logic
+# ComboSystem class to handle combo logic (Jstris-compatible)
 class ComboSystem:
     def __init__(self, debug_mode=False):
         self.combo_count = 0
         self.debug_message = ""
         self.debug_time = 0
         self.debug_display_time = 5.0  # Display debug message for 5 seconds
-        # Track if we've cleared lines in the last placement
-        self.last_placement_cleared_lines = False
         # Track total garbage lines sent in this combo
         self.total_combo_garbage_sent = 0
         self.debug_mode = debug_mode  # Store debug mode
         if self.debug_mode:
-            print("[COMBO DEBUG] Initialized combo system")
+            print("[COMBO DEBUG] Initialized Jstris-compatible combo system")
 
     def update(self, lines_cleared, current_time):
         """Update combo state based on lines cleared at current time"""
@@ -29,48 +27,27 @@ class ComboSystem:
 
         if lines_cleared > 0:
             # Lines cleared in this placement
-            if self.last_placement_cleared_lines:
-                # Previous placement also cleared lines, so increment combo
+            if self.combo_count > 0:
+                # We already have a combo going, increment it
                 self.combo_count += 1
+                debug_message = f"COMBO x{self.combo_count}!"
                 if self.debug_mode:
-                    print(
-                        f"[COMBO DEBUG]  - Previous placement cleared lines too. Incrementing combo to {self.combo_count}"
-                    )
-
-                # Show combo message if 2 or more in combo count
-                if (
-                    self.combo_count >= 1
-                ):  # In Jstris, even the first combo (consecutive clears) gets a message
-                    debug_message = f"COMBO x{self.combo_count}!"
-            elif lines_cleared > 1:
-                debug_message = f"COMBO x{lines_cleared}!"
-                self.combo_count = lines_cleared
-                if self.debug_mode:
-                    print(
-                        f"[COMBO DEBUG]  - New combo started with {lines_cleared} lines"
-                    )
+                    print(f"[COMBO DEBUG]  - Continuing combo, now at {self.combo_count}")
             else:
-                # First line clear in a potential combo
-                self.combo_count = (
-                    0  # Reset to 0 as this is potentially the first part of a new combo
-                )
+                # Starting a new combo
+                self.combo_count = 1  # First clear starts at 1
+                # In Jstris, the first combo doesn't show a message, only from 2+
                 if self.debug_mode:
-                    print(
-                        f"[COMBO DEBUG]  - First line clear, setting combo to {self.combo_count}"
-                    )
-
-            # Remember that this placement cleared lines
-            self.last_placement_cleared_lines = True
+                    print(f"[COMBO DEBUG]  - Starting new combo at {self.combo_count}")
         else:
             # No lines cleared, reset combo
-            if self.combo_count > 0 or self.last_placement_cleared_lines:
+            if self.combo_count > 0:
                 if self.debug_mode:
-                    print(
-                        f"[COMBO DEBUG]  - No lines cleared, resetting combo from {self.combo_count} to 0"
-                    )
-            self.combo_count = 0
-            self.last_placement_cleared_lines = False
-            self.total_combo_garbage_sent = 0  # Reset garbage tracking for the combo
+                    print(f"[COMBO DEBUG]  - No lines cleared, resetting combo from {self.combo_count} to 0")
+                if self.combo_count > 1:
+                    debug_message = f"COMBO ENDED ({self.combo_count})"
+                self.combo_count = 0
+                self.total_combo_garbage_sent = 0  # Reset garbage tracking for the combo
 
         # Set debug message if one was generated
         if debug_message:
@@ -80,22 +57,20 @@ class ComboSystem:
         # Add detailed logging at the end of the update
         if self.debug_mode:
             print(
-                f"[COMBO DEBUG]  - After: count={self.combo_count}, last_cleared={self.last_placement_cleared_lines}"
+                f"[COMBO DEBUG]  - After: count={self.combo_count}, lines_cleared={lines_cleared}"
             )
 
         # Return current combo count (for display) and any debug message
         return {
             "combo_count": self.combo_count,
             "debug_message": debug_message,
-            "is_combo_active": self.last_placement_cleared_lines,
+            "is_combo_active": self.combo_count > 0,
         }
 
     def get_display(self):
         """Get the string to display for the current combo state"""
         if self.combo_count > 0:
             return f"{self.combo_count}"
-        elif self.last_placement_cleared_lines:
-            return "0"  # Show 0 when we've cleared lines but no combo yet
         else:
             return "-"  # Show dash when no active combo
 
@@ -110,14 +85,17 @@ class ComboSystem:
         return False
 
     def get_garbage_count(self, lines_cleared, combo_num, base_attack):
+        """Calculate garbage to send based on combo count - Jstris compatible"""
         if self.debug_mode:
-            print(f"[ATTACK CALC] Combo Count: {combo_num}")
+            print(f"[ATTACK CALC] Combo Count: {combo_num}, Base Attack: {base_attack}")
 
-        if lines_cleared > 0 and combo_num >= 1:
-            # Combo values: 0=0, 1=0, 2=1, 3=1, 4=1, 5=2, 6=2, 7=3, 8=3, 9=4, 10=4, 11=4, 12+=5
-            if combo_num <= 1:
-                combo_bonus_garbage = 0
-            elif combo_num <= 4:
+        combo_bonus_garbage = 0
+        
+        # Only apply combo bonus if we have a valid combo (at least 2)
+        if combo_num >= 2:
+            # Jstris combo table:
+            # 2=1, 3=1, 4=1, 5=2, 6=2, 7=3, 8=3, 9=4, 10=4, 11=4, 12+=5
+            if combo_num <= 4:
                 combo_bonus_garbage = 1
             elif combo_num <= 6:
                 combo_bonus_garbage = 2
@@ -127,12 +105,11 @@ class ComboSystem:
                 combo_bonus_garbage = 4
             else:  # 12+
                 combo_bonus_garbage = 5
+                
             if self.debug_mode:
                 print(f"[ATTACK CALC] Combo Bonus Garbage: {combo_bonus_garbage}")
-            attack_sent = max(base_attack, combo_bonus_garbage)
-        else:
-            attack_sent = base_attack  # No combo or no lines cleared, use base attack
-
+        
         if self.debug_mode:
-            print(f"[ATTACK CALC] Final Attack Value (Pre-Cancel): {attack_sent}")
-        return attack_sent
+            print(f"[ATTACK CALC] Final Combo Bonus: {combo_bonus_garbage}")
+        
+        return combo_bonus_garbage  # Return just the bonus part
