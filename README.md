@@ -89,25 +89,25 @@ This project uses `pytest` for testing and `pytest-cov` for coverage analysis.
 
 The codebase is organized into several modules:
 
-*   **`peer/`**: Contains the peer-to-peer networking code
-    *   `peer.py`: Main entry point for running a peer, handles initial setup and logging.
-    *   `lobby.py`: Manages the `curses`-based game lobby UI, player readiness, game start coordination, and network message processing.
-    *   `grpc_peer.py`: Implements the P2P network layer using gRPC
+*   **`peer/`**: Contains the peer-to-peer networking code.
+    *   `peer.py`: Main entry point for running a peer. Handles argument parsing, logging setup (generating a unique log file per player), random player name generation, and launches the lobby UI.
+    *   `lobby.py`: Manages the `curses`-based game lobby UI, coordinates player readiness and game start (including seed generation/agreement), processes network messages (relaying between network and game/UI), runs the actual game via `run_game` after the lobby phase, and displays final results.
+    *   `grpc_peer.py`: Implements the P2P network layer using gRPC, handling connections, message streaming, and basic peer management.
+*   **`proto/`**: Contains Protocol Buffer definitions and generated code.
+    *   `tetris.proto`: Defines the structure of messages exchanged between peers (e.g., `READY`, `START`, `GARBAGE`, `GAME_STATE`, `LOSE`).
+    *   `tetris_pb2.py`, `tetris_pb2_grpc.py`, `tetris_pb2.pyi`: Python code generated from `tetris.proto` for message serialization/deserialization and gRPC service definitions.
+*   **`game/`**: Contains the core game logic.
+    *   `state.py`: Manages the fundamental game state, including the board representation, piece definitions (`Piece` class), piece movement/collision logic, line clearing, and garbage line handling.
+    *   `combo.py`: Implements the combo detection logic based on consecutive line clears, following Jstris rules for calculating bonus garbage.
+    *   `controller.py`: Orchestrates the active gameplay loop. It handles user input processing, piece gravity, locking mechanics, scoring, attack calculation (base attack + combo bonus), sending/receiving garbage, managing game timing/difficulty, and invoking rendering functions.
+*   **`ui/`**: Contains user interface components.
+    *   `curses_renderer.py`: Responsible for rendering the game visuals using the `curses` library. Draws the main board, active piece (including ghost), next/held pieces, opponent boards, score/level information, and game over screen.
+    *   `input_handler.py`: Handles low-level keyboard input during active gameplay, tracking key press states and timing for features like continuous movement (auto-repeat).
+*   **`tests/`**: Contains unit and integration tests using `pytest`.
 
-*   **`proto/`**: Contains Protocol Buffer definitions
-    - `tetris.proto`: Protocol definitions for game messages (READY, START, GARBAGE, etc.)
-    - `tetris_pb2.py` and `tetris_pb2_grpc.py`: Generated Protocol Buffer code
+## Logging
 
-*   **`game/`**: Contains game logic
-    - `state.py`: Core game state management (board, pieces, scoring, garbage handling).
-    - `combo.py`: Handles combo system for clearing multiple lines.
-    - `controller.py`: Coordinates game logic updates, input processing, and calls to the renderer.
-
-*   **`ui/`**: Contains user interface code
-    - `curses_renderer.py`: Manages rendering the main game board, pieces, scores, and opponent boards using `curses`.
-    - `input_handler.py`: Handles keyboard input specifically during the game phase.
-
-*   **`tetris_game.py`**: Contains the main game loop logic (`run_game`) called after the lobby phase.
+Each player instance generates a log file in the project's root directory upon starting (e.g., `player_name_CoolPlayer.log`). This file captures standard output (`stdout`) and standard error (`stderr`) during the game session, which can be helpful for debugging. These `.log` files are automatically ignored by git due to the `.gitignore` configuration.
 
 ## Game Controls
 
